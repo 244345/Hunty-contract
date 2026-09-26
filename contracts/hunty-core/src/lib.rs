@@ -2453,8 +2453,8 @@ impl HuntyCore {
     /// Verifies a candidate answer for a registered player with authorization and rate limiting.
     ///
     /// Unlike `submit_answer`, `preview_answer` does not mark the clue as completed, award points,
-    /// or emit clue completion events, but requires player authorization and enforces the same
-    /// per-minute rate limits and attempt cooldowns to prevent brute-force dictionary attacks.
+    /// or emit clue completion events. It still requires player authorization and enforces the
+    /// same per-minute rate limit, per-clue attempt cap, and attempt cooldown.
     pub fn preview_answer(
         env: Env,
         hunt_id: u64,
@@ -2491,6 +2491,8 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
+        Self::ensure_attempts_remaining(&env, &hunt, clue_id, &player)?;
+
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
             for i in 0..progress.recent_submissions.len() {
@@ -2525,6 +2527,9 @@ impl HuntyCore {
             .map_err(HuntErrorCode::from)?;
 
         let correct = Self::is_answer_correct(&clue, &submitted_hash);
+        if !correct {
+            Storage::increment_clue_attempt_count(&env, hunt_id, clue_id, &player);
+        }
         let preview_event = AnswerPreviewedEvent {
             hunt_id,
             player: player.clone(),
@@ -2563,6 +2568,7 @@ impl HuntyCore {
     /// * `ClueNotFound` - Clue does not exist in this hunt
     /// * `ClueAlreadyCompleted` - Player has already completed this clue
     /// * `InvalidAnswer` - Submitted answer does not match the stored hash
+    /// * `InvalidMaxAttempts` - Player has exhausted attempts for this clue
     /// * `DuplicateSubmission` - Submission nonce/timestamp envelope was already processed
     /// * `SubmissionExpired` - Submission timestamp is too old or too far in the future
     ///
@@ -2655,6 +2661,20 @@ impl HuntyCore {
         false
     }
 
+    fn ensure_attempts_remaining(
+        env: &Env,
+        hunt: &Hunt,
+        clue_id: u32,
+        player: &Address,
+    ) -> Result<(), HuntErrorCode> {
+        if Storage::get_clue_attempt_count(env, hunt.hunt_id, clue_id, player)
+            >= hunt.max_attempts_per_clue
+        {
+            return Err(HuntErrorCode::InvalidMaxAttempts);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finalize_answer_submission(
         env: &Env,
@@ -2669,6 +2689,7 @@ impl HuntyCore {
         record_failed_submission: bool,
     ) -> Result<(), HuntErrorCode> {
         if !answer_correct {
+            Storage::increment_clue_attempt_count(env, hunt_id, clue_id, player);
             if record_failed_submission && hunt.max_submissions_per_minute > 0 {
                 progress.recent_submissions.push_back(current_time);
             }
@@ -2799,6 +2820,8 @@ impl HuntyCore {
         if Self::team_has_completed_clue(&env, &hunt, &player, clue_id) {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
+
+        Self::ensure_attempts_remaining(&env, &hunt, clue_id, &player)?;
 
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
@@ -2933,6 +2956,8 @@ impl HuntyCore {
         if Self::team_has_completed_clue(&env, &hunt, &player, clue_id) {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
+
+        Self::ensure_attempts_remaining(&env, &hunt, clue_id, &player)?;
 
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
