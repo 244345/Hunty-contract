@@ -786,6 +786,7 @@ dependencies = [
 name = "hunty-core"
 version = "0.0.0"
 dependencies = [
+ "hunty-common",
  "hunty-migration",
  "nft-reward",
  "reward-interface",
@@ -1141,6 +1142,7 @@ dependencies = [
 name = "reward-manager"
 version = "0.0.0"
 dependencies = [
+ "hunty-common",
  "hunty-migration",
  "reward-interface",
  "soroban-sdk",

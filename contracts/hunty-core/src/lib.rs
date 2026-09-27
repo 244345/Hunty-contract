@@ -6,7 +6,6 @@
 
 mod errors;
 mod migration;
-mod monitoring;
 mod rate_limit;
 mod sanitization;
 mod storage;
@@ -189,7 +188,7 @@ impl HuntyCore {
     ) -> Result<u64, HuntErrorCode> {
         creator.require_auth();
         // Telemetry via event: no instance-storage read-modify-write on this path.
-        monitoring::Monitoring::record_invocation_event(&env, 50_000, true);
+        hunty_common::monitoring::Monitoring::record_invocation_event(&env, 50_000, true);
         if Storage::is_blacklisted(&env, &creator) {
             return Err(HuntErrorCode::AddressBlacklisted);
         }
@@ -3596,12 +3595,12 @@ impl HuntyCore {
         migration::HuntyCoreMigration::rollback_migration(&env, &admin)
     }
 
-    pub fn get_active_alerts(env: Env) -> Vec<monitoring::HealthAlert> {
-        monitoring::Monitoring::active_alerts(&env)
+    pub fn get_active_alerts(env: Env) -> Vec<hunty_common::monitoring::HealthAlert> {
+        hunty_common::monitoring::Monitoring::active_alerts(&env)
     }
 
-    pub fn get_health_dashboard(env: Env) -> monitoring::ContractHealth {
-        monitoring::Monitoring::health_dashboard(&env)
+    pub fn get_health_dashboard(env: Env) -> hunty_common::monitoring::ContractHealth {
+        hunty_common::monitoring::Monitoring::health_dashboard(&env)
     }
 
     #[cfg(debug_assertions)]

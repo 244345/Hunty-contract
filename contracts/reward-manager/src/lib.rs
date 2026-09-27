@@ -3130,8 +3130,8 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        monitoring::Monitoring::record_large_withdrawal(&env, amount);
-        monitoring::Monitoring::record_invocation(&env, 80_000, true);
+        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, amount);
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
 
@@ -3225,8 +3225,8 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        monitoring::Monitoring::record_large_withdrawal(&env, balance);
-        monitoring::Monitoring::record_invocation(&env, 80_000, true);
+        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, balance);
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
 
@@ -3607,8 +3607,8 @@ impl RewardManager {
         migration::RewardManagerMigration::rollback_migration(&env, &admin)
     }
 
-    pub fn get_health_dashboard(env: Env) -> monitoring::ContractHealth {
-        monitoring::Monitoring::health_dashboard(&env)
+    pub fn get_health_dashboard(env: Env) -> hunty_common::monitoring::ContractHealth {
+        hunty_common::monitoring::Monitoring::health_dashboard(&env)
     }
 
     /// Exposes a paginated read query for the audit log of a given pool.
@@ -3680,7 +3680,6 @@ fn sort_amounts(amounts: soroban_sdk::Vec<i128>, len: u32) -> soroban_sdk::Vec<i
 
 pub mod errors;
 mod migration;
-mod monitoring;
 mod nft_handler;
 pub mod storage;
 mod token_handler;
