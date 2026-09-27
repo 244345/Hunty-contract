@@ -1,0 +1,45 @@
+name: Auto-merge conflict-free PRs
+
+# Merges every non-draft PR into main as soon as GitHub reports it has no
+# merge conflicts. No review or status checks are required.
+#
+# Uses pull_request_target so fork PRs get a write-scoped token. This job must
+# never check out or run code from the PR: it only calls the GitHub API.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  merge:
+    name: Merge if conflict-free
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for mergeability and merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # GitHub computes mergeability asynchronously; poll until it settles.
+          for _ in $(seq 1 30); do
+            state=$(gh pr view "$PR" --json mergeable -q .mergeable)
+            [ "$state" != "UNKNOWN" ] && break
+            sleep 10
+          done
+          echo "PR #$PR mergeable: $state"
+          if [ "$state" != "MERGEABLE" ]; then
+            echo "Not merging: PR has conflicts or mergeability is unknown."
+            exit 0
+          fi
+          gh pr merge "$PR" --merge
