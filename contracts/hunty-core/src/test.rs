@@ -9189,18 +9189,78 @@ mod test {
             let (hunt_id, contract_id) =
                 setup_completed_hunt_with_rewards(&env, &creator, &player, 5, 1000);
 
-            // Creator cancels the hunt before the player claims their reward.
+            // Force Cancelled without going through cancel_hunt (which rejects
+            // once players have completed — see #1099).
             env.mock_all_auths();
             as_core_contract(&env, &contract_id, |env| {
-                HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+                let mut hunt = Storage::get_hunt(env, hunt_id).unwrap();
+                hunt.status = HuntStatus::Cancelled;
+                Storage::save_hunt(env, &hunt);
             });
 
-            // Try to complete the hunt â€” should fail with InvalidHuntStatus
+            // Try to complete the hunt — should fail with InvalidHuntStatus
             env.mock_all_auths();
             let result = as_core_contract(&env, &contract_id, |env| {
                 HuntyCore::complete_hunt(env.clone(), hunt_id, player.clone())
             });
             assert_eq!(result, Err(HuntErrorCode::InvalidHuntStatus));
+        }
+
+        #[test]
+        fn test_complete_hunt_allowed_while_paused() {
+            // #1100: Pausing must stop play, not block reward claims.
+            let env = Env::default();
+            env.ledger().set_timestamp(1_700_000_000);
+            let creator = Address::generate(&env);
+            let player = Address::generate(&env);
+
+            let (hunt_id, contract_id) =
+                setup_completed_hunt_with_rewards(&env, &creator, &player, 5, 1000);
+
+            env.mock_all_auths();
+            as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::deactivate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            });
+
+            env.mock_all_auths();
+            as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::complete_hunt(env.clone(), hunt_id, player.clone()).unwrap();
+            });
+
+            let progress = as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::get_player_progress(env.clone(), hunt_id, player.clone()).unwrap()
+            });
+            assert!(progress.reward_claimed);
+
+            let hunt = as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::get_hunt_info(env.clone(), hunt_id).unwrap()
+            });
+            assert_eq!(hunt.status, HuntStatus::Paused);
+            assert_eq!(hunt.reward_config.claimed_count, 1);
+        }
+
+        #[test]
+        fn test_cancel_hunt_rejected_when_players_completed() {
+            // #1099: Creator cannot cancel after players finish to refund the pool.
+            let env = Env::default();
+            env.ledger().set_timestamp(1_700_000_000);
+            let creator = Address::generate(&env);
+            let player = Address::generate(&env);
+
+            let (hunt_id, contract_id) =
+                setup_completed_hunt_with_rewards(&env, &creator, &player, 5, 1000);
+
+            env.mock_all_auths();
+            let result = as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone())
+            });
+            assert_eq!(result, Err(HuntErrorCode::InvalidHuntStatus));
+
+            let hunt = as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::get_hunt_info(env.clone(), hunt_id).unwrap()
+            });
+            assert_eq!(hunt.status, HuntStatus::Active);
+            assert!(hunt.completed_count > 0);
         }
 
         #[test]
