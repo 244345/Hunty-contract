@@ -596,3 +596,8 @@ Built on [Stellar](https://www.stellar.org/) and [Soroban](https://soroban.stell
 ---
 
 **Note**: This project is in active development. The API may change as we iterate on the design.
+
+## Handsoff notes
+
+<!-- handsoff-issue-1109 -->
+- #1109: deploy_mainnet.sh calls initialize with arguments none of the contracts accept
