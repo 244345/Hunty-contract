@@ -27,11 +27,11 @@
   },
   "dependencies": {
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
     "redis": "^6.2.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/express-rate-limit": "^6.0.2",
     "@types/node": "^26.6.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

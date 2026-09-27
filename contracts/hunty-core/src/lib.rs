@@ -1522,6 +1522,13 @@ impl HuntyCore {
         // Load full hunt from persistent for mutation
         let mut hunt = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
 
+        // #1099: Once any player has completed, cancellation would refund the
+        // pool and leave frozen winner ranks unclaimable. Creators must use
+        // `close_hunt` instead (pays eligible winners, then leaves leftovers).
+        if hunt.completed_count > 0 {
+            return Err(HuntErrorCode::InvalidHuntStatus);
+        }
+
         // Handle refunds for any remaining funded reward pool balance.
         if let Some(reward_manager_addr) = Storage::get_reward_manager(&env) {
             let mut balance_args: Vec<Val> = Vec::new(&env);
@@ -1581,8 +1588,8 @@ impl HuntyCore {
     /// hunt but have not yet claimed. Players who have not completed the hunt,
     /// or whose frozen completion rank is outside `max_winners`, keep their
     /// progress and are simply not rewarded. Any unspent reward-pool balance is
-    /// left intact (a creator can refund it separately via [`cancel_hunt`] flows
-    /// only while a hunt is still cancellable — see project docs).
+    /// left intact. [`cancel_hunt`] is rejected once any player has completed
+    /// (use this method instead to pay winners).
     ///
     /// Only the creator may close a hunt, and only while it is `Active` or
     /// `Paused`. Closing a `Draft`, `Completed`, `Cancelled`, `EmergencyStopped`,
@@ -1893,7 +1900,7 @@ impl HuntyCore {
     ///
     /// # Errors
     /// * `HuntNotFound` - Hunt does not exist
-    /// * `InvalidHuntStatus` - Hunt is not Active (e.g. already Completed or Cancelled)
+    /// * `InvalidHuntStatus` - Hunt is not Active or Paused (e.g. Completed or Cancelled)
     /// * `PlayerNotRegistered` - Player is not registered
     /// * `HuntNotCompleted` - Player hasn't completed all required clues
     /// * `RewardAlreadyClaimed` - Player already claimed their reward
@@ -1909,9 +1916,10 @@ impl HuntyCore {
 
         let mut hunt = Storage::get_hunt_or_error(&env, hunt_id).map_err(HuntErrorCode::from)?;
 
-        // Reward claims are only valid while the hunt is Active (a Cancelled hunt's
-        // pool has already been refunded; Draft/Paused/Archived hunts never had one claimed).
-        if hunt.status != HuntStatus::Active {
+        // #1100: Pause stops new play, not payouts. Completed players may still
+        // claim while Paused. Cancelled pools are refunded; Draft/Completed/
+        // Archived/EmergencyStopped hunts reject claims.
+        if hunt.status != HuntStatus::Active && hunt.status != HuntStatus::Paused {
             return Err(HuntErrorCode::InvalidHuntStatus);
         }
 
