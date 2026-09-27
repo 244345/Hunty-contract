@@ -66,6 +66,7 @@ function runInvoke(method, contractArgs, options) {
   } catch (error) {
     console.error("Error executing command:");
     console.error(error.stdout || error.message);
+    process.exit(1);
   }
 }
 
