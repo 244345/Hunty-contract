@@ -514,7 +514,8 @@ impl HuntyCore {
     }
 
     /// Adds a clue to a hunt. Only the hunt creator can add clues.
-    /// Answers are hashed with SHA256 before storage; the hash is never exposed.
+    /// Answers are hashed with SHA256 before storage. The ledger is public, so this is not a
+    /// secrecy guarantee; answer verification remains on-chain through plaintext submissions.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
@@ -2453,8 +2454,8 @@ impl HuntyCore {
     /// Verifies a candidate answer for a registered player with authorization and rate limiting.
     ///
     /// Unlike `submit_answer`, `preview_answer` does not mark the clue as completed, award points,
-    /// or emit clue completion events, but requires player authorization and enforces the same
-    /// per-minute rate limits and attempt cooldowns to prevent brute-force dictionary attacks.
+    /// or emit clue completion events. It still requires player authorization and enforces the
+    /// same per-minute rate limit, per-clue attempt cap, and attempt cooldown.
     pub fn preview_answer(
         env: Env,
         hunt_id: u64,
@@ -2491,6 +2492,8 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
+        Self::ensure_attempts_remaining(&env, &hunt, clue_id, &player)?;
+
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
             for i in 0..progress.recent_submissions.len() {
@@ -2525,6 +2528,9 @@ impl HuntyCore {
             .map_err(HuntErrorCode::from)?;
 
         let correct = Self::is_answer_correct(&clue, &submitted_hash);
+        if !correct {
+            Storage::increment_clue_attempt_count(&env, hunt_id, clue_id, &player);
+        }
         let preview_event = AnswerPreviewedEvent {
             hunt_id,
             player: player.clone(),
@@ -2563,6 +2569,7 @@ impl HuntyCore {
     /// * `ClueNotFound` - Clue does not exist in this hunt
     /// * `ClueAlreadyCompleted` - Player has already completed this clue
     /// * `InvalidAnswer` - Submitted answer does not match the stored hash
+    /// * `InvalidMaxAttempts` - Player has exhausted attempts for this clue
     /// * `DuplicateSubmission` - Submission nonce/timestamp envelope was already processed
     /// * `SubmissionExpired` - Submission timestamp is too old or too far in the future
     ///
@@ -2655,6 +2662,20 @@ impl HuntyCore {
         false
     }
 
+    fn ensure_attempts_remaining(
+        env: &Env,
+        hunt: &Hunt,
+        clue_id: u32,
+        player: &Address,
+    ) -> Result<(), HuntErrorCode> {
+        if Storage::get_clue_attempt_count(env, hunt.hunt_id, clue_id, player)
+            >= hunt.max_attempts_per_clue
+        {
+            return Err(HuntErrorCode::InvalidMaxAttempts);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finalize_answer_submission(
         env: &Env,
@@ -2669,6 +2690,7 @@ impl HuntyCore {
         record_failed_submission: bool,
     ) -> Result<(), HuntErrorCode> {
         if !answer_correct {
+            Storage::increment_clue_attempt_count(env, hunt_id, clue_id, player);
             if record_failed_submission && hunt.max_submissions_per_minute > 0 {
                 progress.recent_submissions.push_back(current_time);
             }
@@ -2800,6 +2822,8 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
+        Self::ensure_attempts_remaining(&env, &hunt, clue_id, &player)?;
+
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
             for i in 0..progress.recent_submissions.len() {
@@ -2865,126 +2889,6 @@ impl HuntyCore {
             current_time,
             answer_correct,
             false,
-        )?;
-
-        Ok(())
-    }
-
-    /// Variant of `submit_answer` which accepts a precomputed SHA256 answer hash.
-    /// This avoids on-chain normalization and hashing when the client supplies
-    /// the correctly computed `answer_hash = SHA256(hunt_id || clue_id || normalized_answer)`.
-    /// Use this from off-chain callers that can perform normalization+hashing cheaply.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_answer_with_hash(
-        env: Env,
-        hunt_id: u64,
-        clue_id: u32,
-        player: Address,
-        answer_hash: BytesN<32>,
-        submission_nonce: u64,
-        submitted_at: u64,
-    ) -> Result<(), HuntErrorCode> {
-        // Require player authorization
-        player.require_auth();
-
-        if Storage::is_pause_answers(&env) {
-            return Err(HuntErrorCode::AnswersPaused);
-        }
-
-        // 1. Verify hunt exists and is active
-        let hunt = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
-
-        let current_time = env.ledger().timestamp();
-        if !hunt.is_active(current_time) {
-            return Err(HuntErrorCode::HuntNotActive);
-        }
-
-        if Storage::is_banned(&env, hunt_id, &player) {
-            return Err(HuntErrorCode::BannedPlayer);
-        }
-
-        Self::validate_submission_timestamp(current_time, submitted_at)
-            .map_err(HuntErrorCode::from)?;
-        Self::assert_submission_not_replayed(
-            &env,
-            hunt_id,
-            clue_id,
-            &player,
-            submission_nonce,
-            submitted_at,
-            current_time,
-        )
-        .map_err(HuntErrorCode::from)?;
-
-        // All cheap validation (player registration, clue existence, completion state, rate
-        // limits) runs BEFORE we write the processed-submission entry.  This prevents nonce
-        // exhaustion on validation failures and stops unregistered addresses from bloating
-        // ledger storage.  The replay guard above is a read-only check and stays in place.
-        let mut progress = Storage::get_player_progress(&env, hunt_id, &player)
-            .ok_or(HuntErrorCode::PlayerNotRegistered)?;
-
-        let clue = Storage::get_clue(&env, hunt_id, clue_id).ok_or(HuntErrorCode::ClueNotFound)?;
-
-        if progress.has_completed_clue(clue_id) {
-            return Err(HuntErrorCode::ClueAlreadyCompleted);
-        }
-
-        // In team mode, a clue solved by any teammate counts as completed for the team
-        if Self::team_has_completed_clue(&env, &hunt, &player, clue_id) {
-            return Err(HuntErrorCode::ClueAlreadyCompleted);
-        }
-
-        if hunt.max_submissions_per_minute > 0 {
-            let mut updated_submissions = Vec::new(&env);
-            for i in 0..progress.recent_submissions.len() {
-                // Stored state may be inconsistent — return a typed error instead of aborting.
-                let ts = progress
-                    .recent_submissions
-                    .get(i)
-                    .ok_or(HuntErrorCode::CorruptPlayerProgress)?;
-                if current_time < ts + 60 {
-                    updated_submissions.push_back(ts);
-                }
-            }
-            progress.recent_submissions = updated_submissions;
-
-            if progress.recent_submissions.len() >= hunt.max_submissions_per_minute {
-                // Stored state may be inconsistent — return a typed error instead of aborting.
-                let oldest_ts = progress
-                    .recent_submissions
-                    .get(0)
-                    .ok_or(HuntErrorCode::CorruptPlayerProgress)?;
-                let elapsed = current_time.saturating_sub(oldest_ts);
-                let _cooldown_remaining = 60u64.saturating_sub(elapsed);
-                return Err(HuntErrorCode::from(HuntError::RateLimitExceeded));
-            }
-            progress.recent_submissions.push_back(current_time);
-        }
-
-        // All validation passed — mark the nonce as consumed so the same envelope cannot be
-        // replayed, then proceed to answer evaluation.
-        Storage::save_processed_submission(
-            &env,
-            hunt_id,
-            clue_id,
-            &player,
-            submission_nonce,
-            submitted_at,
-            submitted_at.saturating_add(ANSWER_SUBMISSION_WINDOW_SECS),
-        );
-
-        let answer_correct = Self::is_answer_correct(&clue, &answer_hash);
-        Self::finalize_answer_submission(
-            &env,
-            &hunt,
-            &clue,
-            &mut progress,
-            &player,
-            hunt_id,
-            clue_id,
-            current_time,
-            answer_correct,
-            true,
         )?;
 
         Ok(())

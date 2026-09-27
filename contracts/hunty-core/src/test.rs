@@ -412,7 +412,7 @@ mod test {
     }
 
     #[test]
-    fn test_submit_answer_with_hash_works() {
+    fn test_public_answer_hash_cannot_be_replayed_as_an_answer() {
         let env = Env::default();
         env.ledger().set_timestamp(1_700_000_000);
         let creator = Address::generate(&env);
@@ -460,40 +460,36 @@ mod test {
             HuntyCore::register_player(env.clone(), hunt_id, player2.clone()).unwrap();
         });
 
-        // Submit plaintext answer for player1
-        let res1 = env.as_contract(&contract_id, || {
+        // Read the value exposed in the stored Clue, as a ledger reader could.
+        let leaked_digest_text = env.as_contract(&contract_id, || {
+            let clue = Storage::get_clue(&env, hunt_id, clue_id).unwrap();
+            let digest = clue.answer_hashes.get(0).unwrap().to_array();
+            let mut hex = Bytes::new(&env);
+            for byte in digest {
+                hex.push_back(b"0123456789abcdef"[(byte >> 4) as usize]);
+                hex.push_back(b"0123456789abcdef"[(byte & 0x0f) as usize]);
+            }
+            String::from_bytes(&env, &hex.to_array())
+        });
+
+        // Submitting the public digest as plaintext does not reveal its preimage.
+        let replay = env.as_contract(&contract_id, || {
             HuntyCore::submit_answer(
                 env.clone(),
                 hunt_id,
                 clue_id,
-                player1.clone(),
-                String::from_str(&env, "Paris"),
-                1,
-                env.ledger().timestamp(),
-            )
-        });
-        assert!(res1.is_ok());
-
-        // Compute precomputed hash (uses same normalization helper) and submit for player2
-        let pre_hash = HuntyCore::normalize_and_hash_answer(
-            &env,
-            hunt_id,
-            clue_id,
-            &String::from_str(&env, "Paris"),
-        )
-        .unwrap();
-        let res2 = env.as_contract(&contract_id, || {
-            HuntyCore::submit_answer_with_hash(
-                env.clone(),
-                hunt_id,
-                clue_id,
                 player2.clone(),
-                pre_hash.clone(),
+                leaked_digest_text,
                 1,
                 env.ledger().timestamp(),
             )
         });
-        assert!(res2.is_ok());
+        assert_eq!(replay, Err(HuntErrorCode::InvalidAnswer));
+
+        let progress = env.as_contract(&contract_id, || {
+            Storage::get_player_progress(&env, hunt_id, &player2).unwrap()
+        });
+        assert!(!progress.has_completed_clue(clue_id));
     }
 
     #[test]
@@ -754,6 +750,105 @@ mod test {
             )
         });
         assert_eq!(result, Err(HuntErrorCode::RateLimitExceeded));
+    }
+
+    #[test]
+    fn test_max_attempts_are_enforced_per_clue() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        let creator = Address::generate(&env);
+        let player = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        env.mock_all_auths();
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Attempt Limit Hunt"),
+                String::from_str(env, "Attempts are limited per clue"),
+                None,
+                None,
+                0,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+
+        env.mock_all_auths();
+        as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::add_clue(
+                env.clone(),
+                hunt_id,
+                String::from_str(env, "First clue?"),
+                String::from_str(env, "first answer"),
+                10,
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+            HuntyCore::add_clue(
+                env.clone(),
+                hunt_id,
+                String::from_str(env, "Second clue?"),
+                String::from_str(env, "second answer"),
+                10,
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+            HuntyCore::set_max_attempts_per_clue(env.clone(), hunt_id, creator.clone(), 2, 0)
+                .unwrap();
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
+        });
+
+        for nonce in 1..=2 {
+            env.mock_all_auths();
+            let result = as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::submit_answer(
+                    env.clone(),
+                    hunt_id,
+                    1,
+                    player.clone(),
+                    String::from_str(env, "wrong answer"),
+                    nonce,
+                    env.ledger().timestamp(),
+                )
+            });
+            assert_eq!(result, Err(HuntErrorCode::InvalidAnswer));
+        }
+
+        env.mock_all_auths();
+        let exhausted = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::submit_answer(
+                env.clone(),
+                hunt_id,
+                1,
+                player.clone(),
+                String::from_str(env, "first answer"),
+                3,
+                env.ledger().timestamp(),
+            )
+        });
+        assert_eq!(exhausted, Err(HuntErrorCode::InvalidMaxAttempts));
+
+        env.mock_all_auths();
+        let other_clue = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::submit_answer(
+                env.clone(),
+                hunt_id,
+                2,
+                player.clone(),
+                String::from_str(env, "second answer"),
+                4,
+                env.ledger().timestamp(),
+            )
+        });
+        assert_eq!(other_clue, Ok(()));
     }
 
     #[test]

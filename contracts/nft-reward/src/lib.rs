@@ -500,7 +500,7 @@ impl NftReward {
 
     fn validate_image_uri(_env: &Env, value: &String) -> Result<(), NftErrorCode> {
         if !image_uri_is_valid(value) {
-            return Err(NftErrorCode::InvalidMetadata);
+            return Err(NftErrorCode::InvalidImageUri);
         }
         Ok(())
     }

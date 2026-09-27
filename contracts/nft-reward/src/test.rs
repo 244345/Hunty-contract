@@ -237,7 +237,7 @@ fn test_mint_reward_nft_rejects_empty_image_uri_consistently() {
     let direct_err = client
         .try_mint_reward_nft(&minter, &1, &player, &empty_metadata)
         .unwrap_err();
-    assert_eq!(direct_err, Ok(NftErrorCode::InvalidMetadata));
+    assert_eq!(direct_err, Ok(NftErrorCode::InvalidImageUri));
 
     let mut map: Map<Symbol, Val> = Map::new(&env);
     map.set(
@@ -256,7 +256,29 @@ fn test_mint_reward_nft_rejects_empty_image_uri_consistently() {
     let map_err = client
         .try_mint_reward_nft_from_map(&minter, &1, &player, &map)
         .unwrap_err();
-    assert_eq!(map_err, Ok(NftErrorCode::InvalidMetadata));
+    assert_eq!(map_err, Ok(NftErrorCode::InvalidImageUri));
+}
+
+#[test]
+fn test_mint_reward_nft_returns_structured_invalid_rarity_error() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+    let metadata = create_metadata_full(
+        &env,
+        "Invalid Rarity",
+        "Rarity must be between zero and five",
+        "ipfs://invalid-rarity",
+        "Test Hunt",
+        6,
+        0,
+    );
+
+    let error = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+
+    assert_eq!(error, Ok(NftErrorCode::InvalidRarity));
 }
 
 #[test]
