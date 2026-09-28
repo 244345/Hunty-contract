@@ -443,20 +443,9 @@ impl NftReward {
         let description = extract_field!("description", String, String::from_str(&env, ""));
         let image_uri = extract_field!("image_uri", String, String::from_str(&env, ""));
 
-        let hunt_title = metadata
-            .get(Symbol::new(&env, "hunt_title"))
-            .and_then(|v| String::try_from_val(&env, &v).ok())
-            .unwrap_or_else(|| title.clone());
-
-        let rarity = metadata
-            .get(Symbol::new(&env, "rarity"))
-            .and_then(|v| u32::try_from_val(&env, &v).ok())
-            .unwrap_or(0u32);
-
-        let tier = metadata
-            .get(Symbol::new(&env, "tier"))
-            .and_then(|v| u32::try_from_val(&env, &v).ok())
-            .unwrap_or(0u32);
+        let hunt_title = extract_field!("hunt_title", String, title.clone());
+        let rarity = extract_field!("rarity", u32, 0u32);
+        let tier = extract_field!("tier", u32, 0u32);
 
         let creator = match metadata.get(Symbol::new(&env, "creator")) {
             None => Some(player_address.clone()),

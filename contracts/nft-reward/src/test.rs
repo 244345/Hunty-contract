@@ -159,6 +159,68 @@ fn mint_transferable(
         .unwrap()
 }
 
+fn base_metadata_map(env: &Env) -> Map<Symbol, Val> {
+    let mut map = Map::new(env);
+    map.set(
+        Symbol::new(env, "title"),
+        String::from_str(env, "Reward").into_val(env),
+    );
+    map.set(
+        Symbol::new(env, "description"),
+        String::from_str(env, "Description").into_val(env),
+    );
+    map.set(
+        Symbol::new(env, "image_uri"),
+        String::from_str(env, "ipfs://reward").into_val(env),
+    );
+    map
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_wrong_hunt_title_type() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let owner = Address::generate(&env);
+    let mut map = base_metadata_map(&env);
+    map.set(Symbol::new(&env, "hunt_title"), 42u32.into_val(&env));
+
+    assert_eq!(
+        client.try_mint_reward_nft_from_map(&minter, &1, &owner, &map),
+        Err(Ok(NftErrorCode::InvalidMetadata))
+    );
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_wrong_rarity_type() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let owner = Address::generate(&env);
+    let mut map = base_metadata_map(&env);
+    map.set(
+        Symbol::new(&env, "rarity"),
+        String::from_str(&env, "rare").into_val(&env),
+    );
+
+    assert_eq!(
+        client.try_mint_reward_nft_from_map(&minter, &1, &owner, &map),
+        Err(Ok(NftErrorCode::InvalidMetadata))
+    );
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_wrong_tier_type() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let owner = Address::generate(&env);
+    let mut map = base_metadata_map(&env);
+    map.set(Symbol::new(&env, "tier"), true.into_val(&env));
+
+    assert_eq!(
+        client.try_mint_reward_nft_from_map(&minter, &1, &owner, &map),
+        Err(Ok(NftErrorCode::InvalidMetadata))
+    );
+}
+
 // =========================================================================
 // EXISTING TESTS (preserved from original)
 // =========================================================================
