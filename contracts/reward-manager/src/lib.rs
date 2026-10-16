@@ -1280,6 +1280,10 @@ impl RewardManager {
             .checked_add(amount)
             .ok_or(RewardErrorCode::PoolBalanceOverflow)?;
 
+        // Record the contribution before moving funds so a rejected (e.g.
+        // too-many-funders) call never transfers tokens.
+        Self::record_funder_contribution(&env, hunt_id, &funder, amount)?;
+
         // Update pool balance and cumulative deposit total before the external
         // token transfer, so a reentrant call observes the post-funding state
         // rather than a stale balance (checks-effects-interactions).
