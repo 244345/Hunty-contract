@@ -2773,7 +2773,7 @@ mod test {
 
             let distributor = Address::generate(&env);
             Storage::add_authorized_contract(&env, &distributor);
-            let ok = RewardManager::distribute_rewards_legacy(
+            let res = RewardManager::distribute_rewards_legacy(
                 env.clone(),
                 distributor,
                 player.clone(),
@@ -2781,11 +2781,55 @@ mod test {
                 2_000,
                 false,
             );
-            assert!(ok);
+            assert_eq!(res, Ok(()));
         });
 
         // Amounts move raw: the player receives exactly the 2_000 requested.
         assert_eq!(get_balance(&env, &token_address, &player), 2_000);
+    }
+
+    #[test]
+    fn test_distribute_rewards_legacy_underfunded_pool_rolls_back() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, token_admin) = setup(&env);
+        let creator = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        mint_tokens(&env, &token_address, &token_admin, &creator, 100_000_000);
+
+        env.as_contract(&contract_id, || {
+            initialize_contract(&env, &token_address);
+            create_pool_with_token(&env, creator.clone(), 1, token_address.clone(), 0).unwrap();
+            // Fund with only 1_000 tokens
+            RewardManager::fund_reward_pool(env.clone(), creator.clone(), 1, 1_000).unwrap();
+
+            let distributor = Address::generate(&env);
+            Storage::add_authorized_contract(&env, &distributor);
+
+            // Attempt to distribute 2_000 tokens from the underfunded pool (1_000 available)
+            let res = RewardManager::distribute_rewards_legacy(
+                env.clone(),
+                distributor,
+                player.clone(),
+                1,
+                2_000,
+                false,
+            );
+            assert_eq!(res, Err(RewardErrorCode::InsufficientPool));
+
+            // Verify distribution record was NOT written
+            let record = Storage::get_distribution_record(&env, 1, &player);
+            assert!(record.is_none());
+
+            // Verify distribution status is not distributed
+            let status = RewardManager::get_distribution_status(env.clone(), 1, player.clone());
+            assert!(!status.distributed);
+            assert_eq!(status.xlm_amount, 0);
+        });
+
+        // Verify player received 0 tokens
+        assert_eq!(get_balance(&env, &token_address, &player), 0);
     }
 
     #[test]

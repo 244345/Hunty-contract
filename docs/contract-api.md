@@ -9621,18 +9621,16 @@ The legacy path is not a bypass vector.
 * `_nft_enabled` - Ignored; NFTs are not supported on this path
 
 # Returns
-- `true` if the distribution succeeded
-- `false` if the distribution failed (check the transaction result for the error code)
+- `Ok(())` if the distribution succeeded
+- `Err(RewardErrorCode)` if the distribution failed, causing transaction rollback
 
 # Differences from `distribute_rewards`
-- Returns `bool` instead of `Result<(), RewardErrorCode>` (loses error detail)
 - Discards `_nft_enabled` parameter (NFTs cannot be distributed)
-- No structured logging of the error
 
 **Signature:**
 
 ```rust
-pub fn distribute_rewards_legacy(env: Env, caller: Address, player: Address, hunt_id: u64, xlm_amount: i128, _nft_enabled: bool, // ignored: NFT not supported on legacy path) -> bool
+pub fn distribute_rewards_legacy(env: Env, caller: Address, player: Address, hunt_id: u64, xlm_amount: i128, _nft_enabled: bool, // ignored: NFT not supported on legacy path) -> Result<(), RewardErrorCode>
 ```
 
 **Parameters:**
