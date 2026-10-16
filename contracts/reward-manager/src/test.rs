@@ -5941,4 +5941,204 @@ mod test {
             }
         });
     }
+
+    /// Verifies that pool setters reject modifications when HuntyCore reports the hunt as non-Draft
+    /// (e.g. Active, Completed) to prevent creators from altering tiers, mode, vesting, min distribution,
+    /// or NFT contract after players have competed / completed.
+    #[test]
+    fn test_pool_setters_reject_non_draft_hunt() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, _token_admin) = setup(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let hunt_id = 42;
+
+        // Hunt is Active (status = 1)
+        let hunty_core_id = setup_status_hunty_core(&env, hunt_id, 1);
+
+        env.as_contract(&contract_id, || {
+            RewardManager::initialize(
+                env.clone(),
+                admin.clone(),
+                token_address.clone(),
+                hunty_core_id.clone(),
+            )
+            .unwrap();
+            seed_funded_pool(
+                &env,
+                hunt_id,
+                creator.clone(),
+                token_address.clone(),
+                10_000_000,
+            );
+        });
+
+        env.mock_all_auths_allowing_non_root_auth();
+        env.as_contract(&contract_id, || {
+            // 1. update_pool_config
+            let res = RewardManager::update_pool_config(env.clone(), creator.clone(), hunt_id, 100);
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 2. set_min_distribution_interval
+            let res = RewardManager::set_min_distribution_interval(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                300,
+            );
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 3. set_distribution_mode
+            let res = RewardManager::set_distribution_mode(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                DistributionMode::Proportional,
+            );
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 4. set_pool_tiers
+            let mut tiers = Vec::new(&env);
+            tiers.push_back(_TimeBasedRewardTier {
+                max_completion_secs: 60,
+                xlm_amount: 1_000,
+            });
+            let res = RewardManager::set_pool_tiers(env.clone(), creator.clone(), hunt_id, tiers);
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 5. set_pool_rank_tiers
+            let mut rank_tiers = Vec::new(&env);
+            rank_tiers.push_back(RankRewardTier {
+                rank: 1,
+                xlm_amount: 5_000,
+            });
+            let res = RewardManager::set_pool_rank_tiers(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                rank_tiers,
+            );
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 6. set_pool_nft_contract
+            let dummy_nft = Address::generate(&env);
+            let res = RewardManager::set_pool_nft_contract(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                Some(dummy_nft),
+            );
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+
+            // 7. set_vesting_period_secs
+            let res =
+                RewardManager::set_vesting_period_secs(env.clone(), creator.clone(), hunt_id, 7200);
+            assert_eq!(res, Err(RewardErrorCode::InvalidHuntStatus));
+        });
+    }
+
+    /// Verifies that pool setters allow modifications when HuntyCore reports the hunt as Draft (status = 0).
+    #[test]
+    fn test_pool_setters_allow_draft_hunt() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, _token_admin) = setup(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let hunt_id = 99;
+
+        // Hunt is Draft (status = 0)
+        let hunty_core_id = setup_status_hunty_core(&env, hunt_id, 0);
+
+        env.as_contract(&contract_id, || {
+            RewardManager::initialize(
+                env.clone(),
+                admin.clone(),
+                token_address.clone(),
+                hunty_core_id.clone(),
+            )
+            .unwrap();
+            seed_funded_pool(
+                &env,
+                hunt_id,
+                creator.clone(),
+                token_address.clone(),
+                10_000_000,
+            );
+        });
+
+        env.mock_all_auths_allowing_non_root_auth();
+        env.as_contract(&contract_id, || {
+            // 1. update_pool_config
+            let res = RewardManager::update_pool_config(env.clone(), creator.clone(), hunt_id, 100);
+            assert!(res.is_ok());
+
+            // 2. set_min_distribution_interval
+            let res = RewardManager::set_min_distribution_interval(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                300,
+            );
+            assert!(res.is_ok());
+
+            // 3. set_distribution_mode
+            let res = RewardManager::set_distribution_mode(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                DistributionMode::Proportional,
+            );
+            assert!(res.is_ok());
+
+            // 4. set_pool_tiers
+            let mut tiers = Vec::new(&env);
+            tiers.push_back(_TimeBasedRewardTier {
+                max_completion_secs: 60,
+                xlm_amount: 1_000,
+            });
+            let res = RewardManager::set_pool_tiers(env.clone(), creator.clone(), hunt_id, tiers);
+            assert!(res.is_ok());
+
+            // 5. set_pool_rank_tiers
+            let mut rank_tiers = Vec::new(&env);
+            rank_tiers.push_back(RankRewardTier {
+                rank: 1,
+                xlm_amount: 5_000,
+            });
+            let res = RewardManager::set_pool_rank_tiers(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                rank_tiers,
+            );
+            assert!(res.is_ok());
+
+            // 6. set_pool_nft_contract
+            let dummy_nft = Address::generate(&env);
+            let res = RewardManager::set_pool_nft_contract(
+                env.clone(),
+                creator.clone(),
+                hunt_id,
+                Some(dummy_nft.clone()),
+            );
+            assert!(res.is_ok());
+
+            // 7. set_vesting_period_secs
+            let res =
+                RewardManager::set_vesting_period_secs(env.clone(), creator.clone(), hunt_id, 7200);
+            assert!(res.is_ok());
+
+            // Verify the updated values in pool config
+            let config = RewardManager::get_pool_config(env.clone(), hunt_id).unwrap();
+            assert_eq!(config.min_distribution_amount, 100);
+            assert_eq!(config.min_distribution_interval_secs, 300);
+            assert_eq!(config.distribution_mode, DistributionMode::Proportional);
+            assert_eq!(config.time_based_tiers.len(), 1);
+            assert_eq!(config.rank_based_tiers.len(), 1);
+            assert_eq!(config.nft_contract, Some(dummy_nft));
+            assert_eq!(config.vesting_period_secs, 7200);
+        });
+    }
 }

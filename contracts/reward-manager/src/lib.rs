@@ -364,6 +364,20 @@ impl RewardManager {
         )
     }
 
+    /// Rejects pool configuration changes once HuntyCore reports the hunt
+    /// as non-Draft. When HuntyCore is not configured (e.g. standalone test
+    /// fixtures), the check is skipped.
+    fn require_hunt_draft(env: &Env, hunt_id: u64) -> Result<(), RewardErrorCode> {
+        if let Some(hunty_core) = Storage::get_hunty_core(env) {
+            match Self::hunt_status(env, &hunty_core, hunt_id) {
+                Some(0) => Ok(()),
+                _ => Err(RewardErrorCode::InvalidHuntStatus),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     fn is_delegate(config: &RewardPoolConfig, candidate: &Address) -> bool {
         for i in 0..config.delegates.len() {
             if config.delegates.get(i).unwrap() == *candidate {
@@ -754,6 +768,8 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        Self::require_hunt_draft(&env, hunt_id)?;
+
         if min_distribution_amount < 0 {
             return Err(RewardErrorCode::InvalidAmount);
         }
@@ -831,6 +847,8 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        Self::require_hunt_draft(&env, hunt_id)?;
+
         let old_value = config.min_distribution_interval_secs;
         config.min_distribution_interval_secs = min_distribution_interval_secs;
         Storage::set_pool_config(&env, hunt_id, &config);
@@ -864,6 +882,8 @@ impl RewardManager {
         if creator != config.creator {
             return Err(RewardErrorCode::Unauthorized);
         }
+
+        Self::require_hunt_draft(&env, hunt_id)?;
 
         let old_value = config.distribution_mode;
         config.distribution_mode = mode;
@@ -922,6 +942,8 @@ impl RewardManager {
         if creator != config.creator {
             return Err(RewardErrorCode::Unauthorized);
         }
+
+        Self::require_hunt_draft(&env, hunt_id)?;
 
         // Bound the tier list so the per-distribution config read stays cheap
         // and deterministic (issue #1081). Reject before any mutation so a
@@ -982,6 +1004,8 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        Self::require_hunt_draft(&env, hunt_id)?;
+
         // Bound the tier list before any mutation (issue #1081): a rejected
         // oversized list must not overwrite the stored config.
         let tier_count = rank_based_tiers.len();
@@ -1032,6 +1056,8 @@ impl RewardManager {
         if creator != config.creator {
             return Err(RewardErrorCode::Unauthorized);
         }
+
+        Self::require_hunt_draft(&env, hunt_id)?;
 
         let old_value = config.nft_contract.clone();
         config.nft_contract = nft_contract.clone();
@@ -3085,6 +3111,8 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        Self::require_hunt_draft(&env, hunt_id)?;
+
         let old_value = config.vesting_period_secs;
         config.vesting_period_secs = vesting_period_secs;
         Storage::set_pool_config(&env, hunt_id, &config);
@@ -3997,6 +4025,7 @@ impl RewardManager {
                 migration::RewardManagerMigration::upgrade_executed_event(
                     from_version,
                     report.to_version,
+                    &BytesN::from_array(&env, &[0u8; 32]),
                     env.ledger().timestamp(),
                     admin,
                 ),
