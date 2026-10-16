@@ -11695,6 +11695,117 @@ mod test {
         }
 
         #[test]
+        fn test_cancel_admin_proposal() {
+            let env = Env::default();
+            env.mock_all_auths();
+            let admin = Address::generate(&env);
+            let candidate1 = Address::generate(&env);
+            let candidate2 = Address::generate(&env);
+            let non_admin = Address::generate(&env);
+            let contract_id = env.register_contract(None, HuntyCore);
+
+            as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::initialize_admin(env.clone(), admin.clone()).unwrap();
+            });
+
+            // Cannot cancel when there is no pending proposal
+            as_core_contract(&env, &contract_id, |env| {
+                let res = HuntyCore::cancel_admin_proposal(env.clone(), admin.clone());
+                assert_eq!(res, Err(HuntErrorCode::NoPendingAdmin));
+            });
+
+            // Admin proposes candidate1
+            as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::propose_new_admin(
+                    env.clone(),
+                    admin.clone(),
+                    candidate1.clone(),
+                )
+                .unwrap();
+                assert_eq!(Storage::get_pending_admin(env), Some(candidate1.clone()));
+            });
+
+            // Non-admin cannot cancel proposal
+            as_core_contract(&env, &contract_id, |env| {
+                let res = HuntyCore::cancel_admin_proposal(env.clone(), non_admin.clone());
+                assert_eq!(res, Err(HuntErrorCode::Unauthorized));
+            });
+
+            // Proposed candidate also cannot cancel proposal
+            as_core_contract(&env, &contract_id, |env| {
+                let res = HuntyCore::cancel_admin_proposal(env.clone(), candidate1.clone());
+                assert_eq!(res, Err(HuntErrorCode::Unauthorized));
+            });
+
+            // Admin successfully cancels proposal and event is emitted
+            as_core_contract(&env, &contract_id, |env| {
+                let res = HuntyCore::cancel_admin_proposal(env.clone(), admin.clone());
+                assert_eq!(res, Ok(()));
+                assert_eq!(Storage::get_pending_admin(env), None);
+
+                let events = env.events().all();
+                let (_contract, topics, data): (Address, Vec<Val>, Val) =
+                    events.get(events.len() - 1).unwrap();
+                assert_eq!(topics.len(), 2);
+                assert_eq!(
+                    Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap(),
+                    Symbol::new(env, "ADMIN")
+                );
+                assert_eq!(
+                    Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap(),
+                    Symbol::new(env, "ADM_CNCL")
+                );
+                assert_eq!(
+                    <(Address, Address)>::try_from_val(env, &data).unwrap(),
+                    (admin.clone(), candidate1.clone())
+                );
+            });
+
+            // Candidate1 can no longer accept admin
+            as_core_contract(&env, &contract_id, |env| {
+                let res = HuntyCore::accept_admin(env.clone(), candidate1.clone());
+                assert_eq!(res, Err(HuntErrorCode::NoPendingAdmin));
+            });
+
+            // Subsequent proposal and acceptance works
+            as_core_contract(&env, &contract_id, |env| {
+                HuntyCore::propose_new_admin(
+                    env.clone(),
+                    admin.clone(),
+                    candidate2.clone(),
+                )
+                .unwrap();
+                HuntyCore::accept_admin(env.clone(), candidate2.clone()).unwrap();
+                assert_eq!(Storage::get_admin(env), Some(candidate2.clone()));
+                assert_eq!(Storage::get_pending_admin(env), None);
+            });
+        }
+
+        #[test]
+        fn test_cancel_admin_proposal_requires_auth() {
+            let env = Env::default();
+            let admin = Address::generate(&env);
+            let candidate = Address::generate(&env);
+            let contract_id = env.register_contract(None, HuntyCore);
+
+            as_core_contract(&env, &contract_id, |env| {
+                Storage::set_admin(env, &admin);
+                Storage::set_pending_admin(env, &candidate);
+            });
+
+            // Without mock_all_auths, calling cancel_admin_proposal should fail auth
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                as_core_contract(&env, &contract_id, |env| {
+                    let _ = HuntyCore::cancel_admin_proposal(env.clone(), admin.clone());
+                });
+            }));
+            assert!(
+                res.is_err(),
+                "cancel_admin_proposal must require admin authorization"
+            );
+        }
+
+        #[test]
         fn test_admin_cannot_be_claimed_without_auth_on_fresh_contract() {
             // No auth is mocked: an attacker trying to claim admin on an
             // uninitialized contract must fail authorization. `initialize_admin`
