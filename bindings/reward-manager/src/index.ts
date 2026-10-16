@@ -479,7 +479,7 @@ export interface Client {
    * Note: `nft_enabled` is ignored — NFT distribution requires metadata and a contract address
    * that are not available on this path. Use `distribute_rewards` with `RewardConfig` instead.
    */
-  distribute_rewards_legacy: ({player, hunt_id, xlm_amount, _nft_enabled}: {player: string, hunt_id: u64, xlm_amount: i128, _nft_enabled: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<boolean>>
+  distribute_rewards_legacy: ({player, hunt_id, xlm_amount, _nft_enabled}: {player: string, hunt_id: u64, xlm_amount: i128, _nft_enabled: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
    * Construct and simulate a get_total_xlm_distributed transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -573,7 +573,7 @@ export class Client extends ContractClient {
         get_distribution_status: this.txFromJSON<DistributionStatus>,
         set_nft_reward_contract: this.txFromJSON<Result<void>>,
         admin_withdraw_unclaimed: this.txFromJSON<Result<void>>,
-        distribute_rewards_legacy: this.txFromJSON<boolean>,
+        distribute_rewards_legacy: this.txFromJSON<Result<void>>,
         get_total_xlm_distributed: this.txFromJSON<i128>,
         check_nft_reward_compatibility: this.txFromJSON<boolean>
   }
