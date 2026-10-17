@@ -591,7 +591,8 @@ impl RewardManager {
     /// * `PoolAlreadyExists` - A pool already exists for this hunt_id
     /// * `InvalidAmount` - min_distribution_amount is negative
     /// * `InvalidTokenContract` - token_address is not a valid SAC-compatible token
-    /// * `InvalidConfig` - min_distribution_amount is 0 but no NFT contract provided
+    /// * `InvalidConfig` - min_distribution_amount is 0 but no NFT contract provided,
+    ///   or `nft_royalty_bps` is above 10000
     /// * `NotInitialized` - hunty_core has not been configured (set during initialize)
     /// * `HuntNotFound` - hunt_id does not exist in HuntyCore
     pub fn create_reward_pool_with_nft(
@@ -612,6 +613,12 @@ impl RewardManager {
 
         // Validation: For NFT-only pools (zero XLM), an NFT contract must be set
         if min_distribution_amount == 0 && nft_contract.is_none() {
+            return Err(RewardErrorCode::InvalidConfig);
+        }
+
+        // Royalty is basis points: 0-10000 inclusive (0%-100%). Anything above
+        // would be forwarded to every NFT mint, so reject it up front (#1283).
+        if nft_royalty_bps > 10_000 {
             return Err(RewardErrorCode::InvalidConfig);
         }
 

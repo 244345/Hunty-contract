@@ -5570,6 +5570,44 @@ mod test {
         });
     }
 
+    /// #1283: royalty basis points above 10000 (100%) must be rejected at pool
+    /// creation, while exactly 10000 is accepted.
+    #[test]
+    fn test_create_pool_rejects_royalty_bps_above_10000() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, token_admin) = setup(&env);
+        let creator = Address::generate(&env);
+        mint_tokens(&env, &token_address, &token_admin, &creator, 100_000_000);
+
+        env.as_contract(&contract_id, || {
+            initialize_contract(&env, &token_address);
+
+            let too_high = RewardManager::create_reward_pool(
+                env.clone(),
+                creator.clone(),
+                1283,
+                token_address.clone(),
+                1_000,
+                10_001u32,
+                true,
+            );
+            assert_eq!(too_high, Err(RewardErrorCode::InvalidConfig));
+            assert!(Storage::get_pool_config(&env, 1283).is_none());
+
+            let boundary = RewardManager::create_reward_pool(
+                env.clone(),
+                creator.clone(),
+                1283,
+                token_address.clone(),
+                1_000,
+                10_000u32,
+                true,
+            );
+            assert!(boundary.is_ok());
+        });
+    }
+
     /// Test that refund_pool uses PoolOperation::Refund in audit log (not Withdraw)
     #[test]
     fn test_refund_pool_audit_entry_uses_refund_operation() {
