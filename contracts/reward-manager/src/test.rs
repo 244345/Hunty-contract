@@ -5570,6 +5570,49 @@ mod test {
         });
     }
 
+    /// #1284: adding and removing an authorized contract each emit an event
+    /// carrying the admin and the contract.
+    #[test]
+    fn test_authorized_contract_changes_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, _token_admin) = setup(&env);
+        let admin = Address::generate(&env);
+        let distributor = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            RewardManager::initialize(
+                env.clone(),
+                admin.clone(),
+                token_address.clone(),
+                Address::generate(&env),
+            )
+            .unwrap();
+
+            RewardManager::add_authorized_contract(env.clone(), admin.clone(), distributor.clone())
+                .unwrap();
+            RewardManager::remove_authorized_contract(
+                env.clone(),
+                admin.clone(),
+                distributor.clone(),
+            )
+            .unwrap();
+
+            let events = all_events_legacy(&env);
+            let count = |name: &str| {
+                let topic: Val = Symbol::new(&env, name).into_val(&env);
+                events
+                    .iter()
+                    .filter(|e| {
+                        e.1.get(0).map(|t| t.get_payload()) == Some(topic.get_payload())
+                    })
+                    .count()
+            };
+            assert_eq!(count("AUTH_ADD"), 1, "AUTH_ADD should be emitted once");
+            assert_eq!(count("AUTH_REM"), 1, "AUTH_REM should be emitted once");
+        });
+    }
+
     /// Test that refund_pool uses PoolOperation::Refund in audit log (not Withdraw)
     #[test]
     fn test_refund_pool_audit_entry_uses_refund_operation() {
