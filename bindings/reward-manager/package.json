@@ -5,7 +5,8 @@
   "exports": "./dist/index.js",
   "typings": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "node --test dist/verify-distribution.test.js"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.0.0",
