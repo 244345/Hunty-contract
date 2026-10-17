@@ -124,4 +124,7 @@ pub enum RewardErrorCode {
     /// The hunt is in a terminal state (cancelled or ended), so its pool
     // cannot be funded.
     HuntTerminal = 2041,
+
+    /// No pending admin change exists to accept.
+    NoPendingAdmin = 2042,
 }

@@ -252,3 +252,12 @@ export interface CreatorRemovedFromBlacklistEvent {
   admin: string;
   creator: string;
 }
+
+
+/**
+ * Emitted when a proposed admin accepts the role.
+ */
+export interface AdminTransferredEvent {
+  new_admin: string;
+  old_admin: Option<string>;
+}
