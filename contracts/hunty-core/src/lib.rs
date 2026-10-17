@@ -3813,7 +3813,7 @@ impl HuntyCore {
             });
         }
 
-        let truncated = entries.len() < total_players;
+        let truncated = entries.len() == MAX_LEADERBOARD_SIZE;
         Ok(LeaderboardResult {
             entries: result,
             total_players,

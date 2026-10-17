@@ -8378,7 +8378,7 @@ mod test {
             assert_eq!(result.total_players, crate::MAX_LEADERBOARD_SIZE + 5);
         }
 
-        /// Issue #688: leaderboard result is not truncated when all players fit in the index.
+        /// Issue #1257: registrations without scores do not imply a truncated leaderboard.
         #[test]
         fn test_get_hunt_leaderboard_not_truncated_when_small() {
             let env = Env::default();
@@ -8419,13 +8419,19 @@ mod test {
                 HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
             });
 
-            // Register only 3 players
-            for i in 0..3 {
+            // Five players register, but only three enter the ranked index.
+            let mut players = Vec::new(&env);
+            for _ in 0..5 {
                 let player = Address::generate(&env);
+                players.push_back(player.clone());
                 env.mock_all_auths();
                 as_core_contract(&env, &contract_id, |env| {
                     HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
                 });
+            }
+
+            for i in 0..3 {
+                let player = players.get(i).unwrap();
                 env.ledger().set_timestamp(1_700_000_000 + i as u64 + 1);
                 env.mock_all_auths();
                 as_core_contract(&env, &contract_id, |env| {
@@ -8439,7 +8445,7 @@ mod test {
 
             assert_eq!(result.entries.len(), 3);
             assert!(!result.truncated);
-            assert_eq!(result.total_players, 3);
+            assert_eq!(result.total_players, 5);
         }
 
         /// Test that leaderboard works correctly with pagination (even though the function doesn't have explicit pagination, verify that it returns the correct top N)
