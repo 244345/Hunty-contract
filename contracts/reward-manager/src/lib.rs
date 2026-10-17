@@ -1677,12 +1677,14 @@ impl RewardManager {
         let total_deposited = Storage::get_pool_total_deposited(&env, hunt_id);
         let total_distributed = Storage::get_pool_total_distributed(&env, hunt_id);
         let total_migrated_out = Storage::get_pool_total_migrated_out(&env, hunt_id);
+        let total_refunded = Storage::get_pool_total_refunded(&env, hunt_id);
 
         Some(RewardPoolStatus {
             balance,
             total_deposited,
             total_distributed,
             total_migrated_out,
+            total_refunded,
             creator: config.creator,
             min_distribution_amount: config.min_distribution_amount,
             frozen: config.frozen,

@@ -5570,6 +5570,40 @@ mod test {
         });
     }
 
+    /// #1286: `get_reward_pool` exposes `total_refunded`, so the accounting
+    /// identity can be checked from one call.
+    #[test]
+    fn test_get_reward_pool_reports_total_refunded() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, token_admin) = setup(&env);
+        let creator = Address::generate(&env);
+        mint_tokens(&env, &token_address, &token_admin, &creator, 100_000_000);
+
+        env.as_contract(&contract_id, || {
+            initialize_contract(&env, &token_address);
+            create_pool_with_token(&env, creator.clone(), 1286, token_address.clone(), 1_000)
+                .unwrap();
+            RewardManager::fund_reward_pool(env.clone(), creator.clone(), 1286, 60_000_000)
+                .unwrap();
+
+            let before = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(before.total_refunded, 0);
+
+            RewardManager::refund_pool(env.clone(), creator.clone(), 1286).unwrap();
+
+            let after = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(after.total_refunded, 60_000_000);
+            assert_eq!(
+                after.total_deposited,
+                after.balance
+                    + after.total_distributed
+                    + after.total_refunded
+                    + after.total_migrated_out
+            );
+        });
+    }
+
     /// Test that refund_pool uses PoolOperation::Refund in audit log (not Withdraw)
     #[test]
     fn test_refund_pool_audit_entry_uses_refund_operation() {

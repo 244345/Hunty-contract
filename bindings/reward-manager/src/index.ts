@@ -147,6 +147,10 @@ total_deposited: i128;
  * Cumulative total distributed from this pool.
  */
 total_distributed: i128;
+  /**
+ * Cumulative total refunded from this pool via refund_pool.
+ */
+total_refunded: i128;
 }
 
 
