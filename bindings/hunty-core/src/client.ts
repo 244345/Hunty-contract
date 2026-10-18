@@ -34,7 +34,8 @@ export interface Client {
    * * `env` - The Soroban environment
    * * `hunt_id` - The hunt to add the clue to
    * * `question` - The clue question text (max 2000 chars, non-empty)
-   * * `answer` - Plain-text answer; normalized (trimmed, lowercased) then hashed
+   * * `answer` - Plain-text answer; normalized (trimmed, whitespace-collapsed,
+   *   ASCII-lowercased) then hashed
    * * `points` - Points awarded for solving this clue
    * * `is_required` - Whether this clue must be solved to complete the hunt
    * 
@@ -638,6 +639,12 @@ export interface Client {
    * This avoids on-chain normalization and hashing when the client supplies
    * the correctly computed `answer_hash = SHA256(hunt_id || clue_id || normalized_answer)`.
    * Use this from off-chain callers that can perform normalization+hashing cheaply.
+   * 
+   * The hash must be built with exactly the normalization described on
+   * [`Self::normalize_and_hash_answer`]: outer ASCII whitespace trimmed,
+   * internal runs collapsed to one space, ASCII `A-Z` lowercased, non-ASCII
+   * bytes unchanged. Off-chain callers can use the `hashAnswer` helper in
+   * `bindings/hunty-core`.
    * Resolves to `true` when the answer is correct and `false` when it is wrong,
    * matching `submit_answer`.
    */
