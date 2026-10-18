@@ -1,13 +1,13 @@
-#![allow(dead_code)]
+#![no_std]
 
 mod migration;
+mod storage;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
     String, Symbol, Vec,
 };
 
-pub const MAX_NFT_URI_BYTES: u32 = 100;
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
 
 #[contracterror]

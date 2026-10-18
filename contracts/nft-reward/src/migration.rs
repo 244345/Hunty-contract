@@ -9,10 +9,8 @@ use soroban_sdk::{Address, BytesN, Env, Symbol};
 pub use hunty_migration::MigrationReport;
 
 /// Per-contract migration steps for NftReward storage layouts.
-#[allow(dead_code)]
 pub struct NftRewardMigration;
 
-#[allow(dead_code)]
 impl NftRewardMigration {
     pub fn get_schema_version(env: &Env) -> u32 {
         MigrationFramework::detect_version(env)
@@ -72,7 +70,8 @@ impl NftRewardMigration {
             now,
             admin.clone(),
         );
-        env.events().publish(Self::upgrade_executed_topic(env), event);
+        env.events()
+            .publish(Self::upgrade_executed_topic(env), event);
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
