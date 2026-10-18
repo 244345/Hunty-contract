@@ -1762,7 +1762,11 @@ pub fn search_hunts(env: Env, title_substring: String, offset: u32, limit: u32, 
 
 #### `set_hunt_categories`
 
-Updates categories for a draft hunt. At most five categories are allowed.
+Updates categories for a draft hunt. At most five distinct categories are allowed.
+
+Categories are sanitized (trimmed, validated) and duplicates are collapsed,
+preserving first-seen order, so repeated entries do not use up the five
+slots. Comparison is case-sensitive: `"art"` and `"Art"` are distinct.
 
 **Signature:**
 
