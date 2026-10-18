@@ -181,6 +181,12 @@ export interface BatchClueInput {
   is_required: boolean;
   points: u32;
   question: string;
+  /**
+ * Optional weight multiplier, matching the `weight` argument of
+ * `add_clue`. `None` defaults to 1; `Some(0)` is rejected with
+ * `InvalidWeight`.
+ */
+  weight: Option<u32>;
 }
 
 

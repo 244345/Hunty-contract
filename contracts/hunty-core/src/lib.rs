@@ -108,6 +108,9 @@ mod list_hunts_test;
 mod paused_status_test;
 #[cfg(test)]
 mod registration_capacity_test;
+// Regression tests for #1252 (batch clue weight).
+#[cfg(test)]
+mod batch_clue_weight_test;
 #[cfg(test)]
 mod submission_recording_test;
 // Regression tests for #1011-#1014 (admin persistence, reward-config auth,
@@ -865,6 +868,9 @@ impl HuntyCore {
     ///
     /// The batch is validated against the per-hunt clue cap before writing any new clues,
     /// so a request that would exceed the limit fails without partially adding clues.
+    ///
+    /// Each [`BatchClueInput`] carries the same optional `weight` as [`Self::add_clue`],
+    /// so batch-added clues can be configured exactly like single-clue additions.
     pub fn add_clues(
         env: Env,
         hunt_id: u64,
@@ -895,7 +901,7 @@ impl HuntyCore {
                 clue.points,
                 clue.is_required,
                 Some(clue.difficulty),
-                None, // weight defaults to 1 in insert_clue
+                clue.weight,
             )?;
             clue_ids.push_back(clue_id);
             if clue.is_required {
