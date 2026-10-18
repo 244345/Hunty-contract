@@ -2436,3 +2436,74 @@ fn test_mint_from_map_rejects_excessive_royalty_bps() {
         .unwrap_err();
     assert_eq!(err, Err(NftErrorCode::InvalidRoyalty.into()));
 }
+
+// =========================================================================
+// ISSUE #1294: initialize_schema upgrade-admin security
+// =========================================================================
+
+#[test]
+fn test_constructor_sets_upgrade_admin() {
+    // When deploying via the constructor, the upgrade admin must be set to
+    // the same address as the contract admin, so arbitrary callers cannot
+    // seize upgrade authority via initialize_schema.
+    let env = setup_env();
+    let admin = Address::generate(&env);
+    let minter = Address::generate(&env);
+    let contract_id = env.register(
+        NftReward,
+        (
+            admin.clone(),
+            minter,
+            Option::<u64>::None,
+            default_collection_metadata(&env),
+        ),
+    );
+    env.as_contract(&contract_id, || {
+        let upgrade_admin =
+            hunty_migration::UpgradeAuthorization::get_upgrade_admin(&env);
+        assert_eq!(upgrade_admin, Some(admin));
+    });
+}
+
+#[test]
+fn test_initialize_schema_allows_contract_admin() {
+    // The contract admin (set via __constructor) must be able to call
+    // initialize_schema successfully.
+    let env = setup_env();
+    let admin = Address::generate(&env);
+    let minter = Address::generate(&env);
+    let contract_id = env.register(
+        NftReward,
+        (
+            admin.clone(),
+            minter,
+            Option::<u64>::None,
+            default_collection_metadata(&env),
+        ),
+    );
+    let client = NftRewardClient::new(&env, &contract_id);
+    // Should not panic — admin is the stored ADMIN.
+    client.initialize_schema(&admin);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_initialize_schema_rejects_non_admin() {
+    // A non-admin caller must be rejected by initialize_schema.
+    let env = setup_env();
+    let admin = Address::generate(&env);
+    let minter = Address::generate(&env);
+    let contract_id = env.register(
+        NftReward,
+        (
+            admin,
+            minter,
+            Option::<u64>::None,
+            default_collection_metadata(&env),
+        ),
+    );
+    let client = NftRewardClient::new(&env, &contract_id);
+    let attacker = Address::generate(&env);
+    // This should panic because attacker is not the stored ADMIN.
+    client.initialize_schema(&attacker);
+}

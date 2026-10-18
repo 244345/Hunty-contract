@@ -122,6 +122,9 @@ impl NftReward {
         env.storage()
             .instance()
             .set(&symbol_short!("NFTCNT"), &0u64);
+        // Set upgrade admin to the constructor's admin so the first caller
+        // of initialize_schema cannot hijack upgrade authority.
+        hunty_migration::UpgradeAuthorization::set_upgrade_admin(&env, &admin);
     }
 
     pub fn initialize(
@@ -192,6 +195,14 @@ impl NftReward {
 
     pub fn initialize_schema(env: Env, admin: Address) {
         admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("ADMIN"))
+            .expect("Contract not initialized: no ADMIN set");
+        if admin != stored_admin {
+            panic!("unauthorized: caller is not the contract admin");
+        }
         migration::NftRewardMigration::initialize_schema(&env, &admin);
     }
 
