@@ -1,14 +1,36 @@
 #![allow(dead_code)]
 
 mod migration;
+mod sanitization;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
-    String, Symbol, Vec,
+    String, Symbol, TryFromVal, Val, Vec,
 };
 
+pub use sanitization::{SanitizeError, StringSanitizer};
+
 pub const MAX_NFT_URI_BYTES: u32 = 100;
+pub const MAX_TITLE_BYTES: u32 = 100;
+pub const MAX_DESCRIPTION_BYTES: u32 = 500;
+pub const MAX_HUNT_TITLE_BYTES: u32 = 100;
+pub const MAX_COLLECTION_NAME_BYTES: u32 = 100;
+pub const MAX_COLLECTION_DESCRIPTION_BYTES: u32 = 500;
+pub const MAX_EXTENSION_KEY_BYTES: u32 = 50;
+pub const MAX_EXTENSION_VALUE_BYTES: u32 = 200;
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
+
+/// Validate a user-supplied string through the sanitizer, mapping any
+/// sanitization error to `NftErrorCode::InvalidMetadata`.
+fn sanitize_string(
+    env: &Env,
+    input: &String,
+    max_bytes: u32,
+    allow_empty: bool,
+) -> Result<String, NftErrorCode> {
+    StringSanitizer::sanitize(env, input, max_bytes, allow_empty)
+        .map_err(|_| NftErrorCode::InvalidMetadata)
+}
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -88,7 +110,6 @@ pub struct NftReward;
 impl NftReward {
     /// Constructor - runs atomically during deployment.
     /// Prevents front-running by initializing during deploy transaction.
-    #[allow(unused_variables)]
     pub fn __constructor(
         env: Env,
         admin: Address,
@@ -96,6 +117,22 @@ impl NftReward {
         max_supply: Option<u64>,
         metadata: CollectionMetadata,
     ) {
+        // Sanitize collection metadata strings
+        sanitize_string(
+            &env,
+            &metadata.name,
+            MAX_COLLECTION_NAME_BYTES,
+            false,
+        )
+        .expect("invalid collection name");
+        sanitize_string(
+            &env,
+            &metadata.description,
+            MAX_COLLECTION_DESCRIPTION_BYTES,
+            false,
+        )
+        .expect("invalid collection description");
+
         // Store admin
         env.storage()
             .instance()
@@ -157,25 +194,82 @@ impl NftReward {
     }
 
     pub fn mint_reward_nft(
-        _env: Env,
+        env: Env,
         _minter: Address,
         _hunt_id: u64,
         _owner: Address,
         metadata: NftMetadata,
     ) -> Result<u64, NftErrorCode> {
+        // Empty image_uri check (preserved from existing behaviour)
+        if metadata.image_uri.len() == 0 {
+            return Err(NftErrorCode::InvalidImageUri);
+        }
+        // Sanitize all user-supplied string fields
+        sanitize_string(&env, &metadata.title, MAX_TITLE_BYTES, false)?;
+        sanitize_string(&env, &metadata.description, MAX_DESCRIPTION_BYTES, true)?;
+        sanitize_string(&env, &metadata.image_uri, MAX_NFT_URI_BYTES, false)?;
+        sanitize_string(&env, &metadata.hunt_title, MAX_HUNT_TITLE_BYTES, true)?;
+        // Sanitize extension keys and values
+        for (key, value) in metadata.extensions.iter() {
+            sanitize_string(&env, &key, MAX_EXTENSION_KEY_BYTES, false)?;
+            sanitize_string(&env, &value, MAX_EXTENSION_VALUE_BYTES, true)?;
+        }
         let _ = metadata;
         Ok(1)
     }
 
     pub fn mint_reward_nft_from_map(
-        _env: Env,
+        env: Env,
         _minter: Address,
         _hunt_id: u64,
         _owner: Address,
-        values: Map<Symbol, soroban_sdk::Val>,
+        values: Map<Symbol, Val>,
     ) -> Result<u64, NftErrorCode> {
+        // Extract and sanitize string fields from the map
+        if let Some(title_val) = values.get(Symbol::new(&env, "title")) {
+            if let Ok(title) = String::try_from_val(&env, &title_val) {
+                sanitize_string(&env, &title, MAX_TITLE_BYTES, false)?;
+            }
+        }
+        if let Some(desc_val) = values.get(Symbol::new(&env, "description")) {
+            if let Ok(desc) = String::try_from_val(&env, &desc_val) {
+                sanitize_string(&env, &desc, MAX_DESCRIPTION_BYTES, true)?;
+            }
+        }
+        if let Some(uri_val) = values.get(Symbol::new(&env, "image_uri")) {
+            if let Ok(uri) = String::try_from_val(&env, &uri_val) {
+                // Empty image_uri check (preserved from existing behaviour)
+                if uri.len() == 0 {
+                    return Err(NftErrorCode::InvalidImageUri);
+                }
+                sanitize_string(&env, &uri, MAX_NFT_URI_BYTES, false)?;
+            }
+        }
+        if let Some(hunt_title_val) = values.get(Symbol::new(&env, "hunt_title")) {
+            if let Ok(hunt_title) = String::try_from_val(&env, &hunt_title_val) {
+                sanitize_string(&env, &hunt_title, MAX_HUNT_TITLE_BYTES, true)?;
+            }
+        }
         let _ = values;
         Ok(1)
+    }
+
+    pub fn update_nft_metadata(
+        env: Env,
+        nft_id: u64,
+        owner: Address,
+        description: String,
+        image_uri: String,
+    ) -> Result<(), NftErrorCode> {
+        // Sanitize the user-supplied description and image_uri
+        sanitize_string(&env, &description, MAX_DESCRIPTION_BYTES, true)?;
+        // Empty image_uri check (preserved from existing behaviour)
+        if image_uri.len() == 0 {
+            return Err(NftErrorCode::InvalidImageUri);
+        }
+        sanitize_string(&env, &image_uri, MAX_NFT_URI_BYTES, false)?;
+        let _ = (nft_id, owner);
+        Ok(())
     }
 
     pub fn get_player_nfts(_env: Env, _player: Address, _offset: u32, _limit: u32) -> Vec<u64> {

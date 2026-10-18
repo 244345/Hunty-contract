@@ -4,7 +4,7 @@ extern crate std;
 
 use crate::{
     CollectionMetadata, NftErrorCode, NftMetadata, NftMintedEvent, NftReward, NftRewardClient,
-    MAX_NFT_URI_BYTES, METADATA_SCHEMA_VERSION,
+    MAX_HUNT_TITLE_BYTES, MAX_NFT_URI_BYTES, MAX_TITLE_BYTES, METADATA_SCHEMA_VERSION,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
@@ -2435,4 +2435,276 @@ fn test_mint_from_map_rejects_excessive_royalty_bps() {
         .try_mint_reward_nft_from_map(&minter, &1, &player, &map)
         .unwrap_err();
     assert_eq!(err, Err(NftErrorCode::InvalidRoyalty.into()));
+}
+
+// =========================================================================
+// SANITIZATION TESTS
+// =========================================================================
+
+#[test]
+fn test_mint_reward_nft_rejects_control_characters_in_title() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    // Title with a null byte (control character)
+    let metadata = create_metadata(
+        &env,
+        "Bad\x00Title",
+        "Description",
+        "ipfs://example",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_control_characters_in_description() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata(
+        &env,
+        "Title",
+        "Desc with \x1b escape",
+        "ipfs://example",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_control_characters_in_image_uri() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata(
+        &env,
+        "Title",
+        "Description",
+        "ipfs://\x00example",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_empty_title() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata(
+        &env,
+        "",
+        "Description",
+        "ipfs://example",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_empty_image_uri() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata(
+        &env,
+        "Title",
+        "Description",
+        "",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_title_exceeding_max_bytes() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let long_title = "a".repeat(MAX_TITLE_BYTES as usize + 1);
+    let metadata = create_metadata(
+        &env,
+        &long_title,
+        "Description",
+        "ipfs://example",
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_rejects_hunt_title_exceeding_max_bytes() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata_full(
+        &env,
+        "Title",
+        "Description",
+        "ipfs://example",
+        &"a".repeat(MAX_HUNT_TITLE_BYTES as usize + 1),
+        0,
+        0,
+    );
+
+    let err = client
+        .try_mint_reward_nft(&minter, &1, &player, &metadata)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_accepts_valid_metadata() {
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let metadata = create_metadata(
+        &env,
+        "Valid Title",
+        "Valid description with\nnewline\tand tab",
+        "ipfs://valid",
+    );
+
+    let nft_id = client.mint_reward_nft(&minter, &1, &player, &metadata);
+    assert!(nft_id > 0);
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_control_characters() {
+    let env = setup_env();
+    let (client, _) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let mut map: Map<Symbol, Val> = Map::new(&env);
+    map.set(
+        Symbol::new(&env, "title"),
+        String::from_str(&env, "Bad\x00Title").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "image_uri"),
+        String::from_str(&env, "ipfs://img").into_val(&env),
+    );
+
+    let err = client
+        .try_mint_reward_nft_from_map(&player, &1, &player, &map)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_control_characters_in_uri() {
+    let env = setup_env();
+    let (client, _) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let mut map: Map<Symbol, Val> = Map::new(&env);
+    map.set(
+        Symbol::new(&env, "title"),
+        String::from_str(&env, "Title").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "image_uri"),
+        String::from_str(&env, "ipfs://\x1bimg").into_val(&env),
+    );
+
+    let err = client
+        .try_mint_reward_nft_from_map(&player, &1, &player, &map)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_uri_exceeding_max_bytes() {
+    let env = setup_env();
+    let (client, _) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let long_uri = format!("ipfs://{}", "a".repeat(MAX_NFT_URI_BYTES as usize));
+    let mut map: Map<Symbol, Val> = Map::new(&env);
+    map.set(
+        Symbol::new(&env, "title"),
+        String::from_str(&env, "Title").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "image_uri"),
+        String::from_str(&env, &long_uri).into_val(&env),
+    );
+
+    let err = client
+        .try_mint_reward_nft_from_map(&player, &1, &player, &map)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_rejects_empty_title() {
+    let env = setup_env();
+    let (client, _) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let mut map: Map<Symbol, Val> = Map::new(&env);
+    map.set(
+        Symbol::new(&env, "title"),
+        String::from_str(&env, "").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "image_uri"),
+        String::from_str(&env, "ipfs://img").into_val(&env),
+    );
+
+    let err = client
+        .try_mint_reward_nft_from_map(&player, &1, &player, &map)
+        .unwrap_err();
+    assert_eq!(err, Err(NftErrorCode::InvalidMetadata.into()));
+}
+
+#[test]
+fn test_mint_reward_nft_from_map_accepts_valid_strings() {
+    let env = setup_env();
+    let (client, _) = setup_nft_reward(&env, None);
+    let player = Address::generate(&env);
+
+    let mut map: Map<Symbol, Val> = Map::new(&env);
+    map.set(
+        Symbol::new(&env, "title"),
+        String::from_str(&env, "Valid Map Title").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "description"),
+        String::from_str(&env, "A valid description").into_val(&env),
+    );
+    map.set(
+        Symbol::new(&env, "image_uri"),
+        String::from_str(&env, "ipfs://valid-map").into_val(&env),
+    );
+
+    let nft_id = client.mint_reward_nft_from_map(&player, &1, &player, &map);
+    assert!(nft_id > 0);
 }
