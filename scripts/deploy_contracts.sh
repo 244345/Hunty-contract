@@ -79,13 +79,15 @@ REWARD_MANAGER_ID="$(deploy_contract reward_manager \
   "$HUNTY_CORE_ID")"
 
 # Deploy nft-reward with constructor args: admin, minter, max_supply, metadata
-# max_supply = 0 means unlimited (optional, 0 = None in contract)
+# max_supply is Option<u64>: pass null (None) for unlimited.
+# Do NOT pass "0" — the CLI encodes it as Some(0), capping supply at zero so
+# every mint fails with MaxSupplyReached.
 # metadata: name, description, total_supply, creator
 NFT_METADATA="{\"name\":\"Hunty NFT Reward\",\"description\":\"Reward NFTs for completed hunts\",\"total_supply\":0,\"creator\":\"$DEPLOYER_ADDRESS\"}"
 NFT_REWARD_ID="$(deploy_contract nft_reward \
   "$DEPLOYER_ADDRESS" \
   "$DEPLOYER_ADDRESS" \
-  "0" \
+  "null" \
   "$NFT_METADATA")"
 
 cat > "config/contracts.${ENVIRONMENT}.json" <<JSON

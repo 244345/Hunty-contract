@@ -138,13 +138,16 @@ wasm_hash=$(stellar contract upload \
   --source deployer)
 log "  WASM uploaded: $wasm_hash"
 
+# max_supply is Option<u64>: pass null (None) for unlimited.
+# Do NOT pass "0" — the CLI encodes it as Some(0), capping supply at zero so
+# every mint fails with MaxSupplyReached.
 NFT_METADATA="{\"name\":\"Hunty NFT Reward\",\"description\":\"Reward NFTs for completed hunts\",\"total_supply\":0,\"creator\":\"$ADMIN_ADDRESS\"}"
 contract_id=$(stellar contract deploy \
   --wasm-hash "$wasm_hash" \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE" \
   --source deployer \
-  -- "$ADMIN_ADDRESS" "$ADMIN_ADDRESS" "0" "$NFT_METADATA")
+  -- "$ADMIN_ADDRESS" "$ADMIN_ADDRESS" null "$NFT_METADATA")
 log "  Contract ID  : $contract_id"
 NEW_IDS["nft-reward"]="$contract_id"
 
