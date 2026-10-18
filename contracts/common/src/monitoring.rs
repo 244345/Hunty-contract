@@ -35,12 +35,26 @@ pub struct HealthAlert {
 pub struct Monitoring;
 
 impl Monitoring {
-    /// Telemetry-only invocation record. Emits an event instead of touching
-    /// instance storage, so hot entrypoints (e.g. `create_hunt`) do not pay for
-    /// a full instance read-modify-write — and do not grow the instance entry
-    /// that the contract pays rent on for its whole life. Indexers aggregate
-    /// these off-chain and get strictly more than three running totals would.
+    /// Telemetry record. Emits an event for off-chain indexers AND updates the
+    /// on-chain counters (`INVCT`/`FAILCT`/`GASUN`) that `health_dashboard`
+    /// reads, so the dashboard reflects every recorded invocation.
+    /// `gas_units` is a caller-supplied estimate: contracts cannot observe
+    /// their own consumed budget on-chain, so callers pass the measured
+    /// off-chain cost for their entrypoint.
     pub fn record_invocation_event(env: &Env, gas_units: u64, succeeded: bool) {
+        let total: u64 = env.storage().instance().get(&INVOCATIONS_KEY).unwrap_or(0);
+        env.storage().instance().set(&INVOCATIONS_KEY, &(total + 1));
+
+        let gas_total: u64 = env.storage().instance().get(&GAS_UNITS_KEY).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&GAS_UNITS_KEY, &(gas_total.saturating_add(gas_units)));
+
+        if !succeeded {
+            let failures: u64 = env.storage().instance().get(&FAILURES_KEY).unwrap_or(0);
+            env.storage().instance().set(&FAILURES_KEY, &(failures + 1));
+        }
+
         env.events().publish(
             (symbol_short!("invoke"), symbol_short!("telemetry")),
             (gas_units, succeeded),
@@ -51,22 +65,10 @@ impl Monitoring {
         }
     }
 
-    /// On-chain counter variant. Prefer `record_invocation_event` on hot paths.
-    #[allow(dead_code)]
+    /// On-chain counter variant. Kept for backwards compatibility; delegates
+    /// to `record_invocation_event` so both paths share one code path.
     pub fn record_invocation(env: &Env, gas_units: u64, succeeded: bool) {
-        let total: u64 = env.storage().instance().get(&INVOCATIONS_KEY).unwrap_or(0);
-        env.storage().instance().set(&INVOCATIONS_KEY, &(total + 1));
-
-        let gas_total: u64 = env.storage().instance().get(&GAS_UNITS_KEY).unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&GAS_UNITS_KEY, &(gas_total + gas_units));
-
-        if !succeeded {
-            let failures: u64 = env.storage().instance().get(&FAILURES_KEY).unwrap_or(0);
-            env.storage().instance().set(&FAILURES_KEY, &(failures + 1));
-            Self::raise_alert(env, "invocation_failure");
-        }
+        Self::record_invocation_event(env, gas_units, succeeded);
     }
 
     pub fn record_large_withdrawal(env: &Env, amount: i128) {
