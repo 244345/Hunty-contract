@@ -4125,14 +4125,21 @@ impl RewardManager {
     ) -> PoolAuditLogResponse {
         // `offset` indexes into the retained rolling window. This keeps
         // pagination stable even when the ring buffer has wrapped.
+        // The trail is split across an admin log and a distribution log
+        // (#1359); sequence numbers are unified (admin first), so the
+        // retained window spans both buffers.
         let default_limit = 20;
-        let max_limit = Storage::MAX_AUDIT_ENTRIES_PER_POOL as u32;
+        let max_limit =
+            (Storage::MAX_AUDIT_ENTRIES_PER_POOL + Storage::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL) as u32;
         let query_limit = limit.unwrap_or(default_limit).min(max_limit) as u64;
-        let total = Storage::get_pool_audit_count(&env, hunt_id);
+        let admin_total = Storage::get_pool_admin_audit_count(&env, hunt_id);
+        let dist_total = Storage::get_pool_distribution_audit_count(&env, hunt_id);
+        let total = admin_total.saturating_add(dist_total);
         let mut entries = Vec::new(&env);
 
-        let capacity = Storage::MAX_AUDIT_ENTRIES_PER_POOL;
-        let retained = total.min(capacity);
+        let retained = admin_total
+            .min(Storage::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL)
+            .saturating_add(dist_total.min(Storage::MAX_AUDIT_ENTRIES_PER_POOL));
         if total == 0 || query_limit == 0 {
             return PoolAuditLogResponse {
                 entries,
