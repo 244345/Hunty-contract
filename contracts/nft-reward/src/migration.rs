@@ -1,8 +1,9 @@
 use crate::storage::Storage;
 use crate::METADATA_SCHEMA_VERSION;
 use hunty_migration::{
-    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
-    UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
+    MigrationExecutedEvent, MigrationFramework, MigrationHistoryEntry, UpgradeAuthError,
+    UpgradeAuthorization, UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal,
+    UpgradeProposedEvent,
 };
 use soroban_sdk::{Address, BytesN, Env, Symbol};
 
@@ -250,12 +251,38 @@ impl NftRewardMigration {
         }
     }
 
+    pub fn migration_executed_event(
+        from_version: u32,
+        to_version: u32,
+        executed_at: u64,
+        executor: Address,
+    ) -> MigrationExecutedEvent {
+        MigrationExecutedEvent {
+            from_version,
+            to_version,
+            executed_at,
+            executor,
+        }
+    }
+
+    pub fn get_migration_history(
+        env: &Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<MigrationHistoryEntry> {
+        UpgradeAuthorization::get_migration_history(env, offset, limit)
+    }
+
     pub fn upgrade_proposed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeProposed"),)
     }
 
     pub fn upgrade_executed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeExecuted"),)
+    }
+
+    pub fn migration_executed_topic(env: &Env) -> (Symbol,) {
+        (Symbol::new(env, "MigrationExecuted"),)
     }
 
     /// v0 -> v1: retroactively set metadata version key on legacy NFTs.

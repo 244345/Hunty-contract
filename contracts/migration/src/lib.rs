@@ -20,6 +20,7 @@ const TIMELOCK_KEY: Symbol = symbol_short!("UPTLK");
 const TIMELOCK_PENDING_KEY: Symbol = symbol_short!("UPTLDP");
 const HIST_COUNT_KEY: Symbol = symbol_short!("UPHCT");
 const UPGRADE_ADMIN_KEY: Symbol = symbol_short!("UPADM");
+const MIGR_HIST_COUNT_KEY: Symbol = symbol_short!("MIGHCT");
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -64,6 +65,17 @@ pub struct UpgradeHistoryEntry {
     pub executor: Address,
 }
 
+/// History entry for a schema migration (run_migration), which is not a WASM
+/// upgrade and therefore has no wasm_hash.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MigrationHistoryEntry {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub executed_at: u64,
+    pub executor: Address,
+}
+
 /// A requested timelock reduction that has not taken effect yet.
 ///
 /// Lowering the timelock is itself subject to the current timelock: the new
@@ -95,6 +107,17 @@ pub struct UpgradeExecutedEvent {
     pub from_version: u32,
     pub to_version: u32,
     pub wasm_hash: BytesN<32>,
+    pub executed_at: u64,
+    pub executor: Address,
+}
+
+/// Event for a completed schema migration (run_migration). Distinct from
+/// UpgradeExecuted because migrations are not WASM upgrades and carry no hash.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MigrationExecutedEvent {
+    pub from_version: u32,
+    pub to_version: u32,
     pub executed_at: u64,
     pub executor: Address,
 }
@@ -347,6 +370,49 @@ impl UpgradeAuthorization {
         env.storage().persistent().get(&HIST_COUNT_KEY).unwrap_or(0)
     }
 
+    /// Records a completed schema migration into the migration history
+    /// (separate from the WASM-upgrade history).
+    pub fn record_migration(env: &Env, entry: &MigrationHistoryEntry) {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0);
+        let key = (symbol_short!("MIGHIS"), count);
+        env.storage().persistent().set(&key, entry);
+        env.storage()
+            .persistent()
+            .set(&MIGR_HIST_COUNT_KEY, &(count + 1));
+    }
+
+    /// Returns a page of migration-history entries (no wasm_hash field).
+    pub fn get_migration_history(env: &Env, offset: u32, limit: u32) -> Vec<MigrationHistoryEntry> {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0);
+        if offset >= count {
+            return Vec::new(env);
+        }
+        let end = offset.saturating_add(limit).min(count);
+        let mut entries = Vec::new(env);
+        for i in offset..end {
+            let key = (symbol_short!("MIGHIS"), i);
+            if let Some(entry) = env.storage().persistent().get(&key) {
+                entries.push_back(entry);
+            }
+        }
+        entries
+    }
+
+    pub fn migration_history_count(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0)
+    }
+
     pub fn prepare_migration_run(
         env: &Env,
         admin: &Address,
@@ -390,8 +456,16 @@ impl UpgradeAuthorization {
         to_version: u32,
         now: u64,
     ) {
-        let default_hash = BytesN::from_array(env, &[0u8; 32]);
-        Self::finalize_upgrade_run(env, executor, from_version, to_version, &default_hash, now);
+        Self::clear_proposal(env);
+        Self::record_migration(
+            env,
+            &MigrationHistoryEntry {
+                from_version,
+                to_version,
+                executed_at: now,
+                executor: executor.clone(),
+            },
+        );
     }
 }
 
@@ -875,6 +949,32 @@ mod tests {
             assert_eq!(entry.wasm_hash, hash_a);
             assert_eq!(entry.executed_at, proposal.effective_at);
             assert_eq!(entry.executor, admin);
+        });
+    }
+
+    /// #1299: finalize_migration_run must write to the migration history
+    /// (no wasm_hash) and must NOT pollute the WASM-upgrade history with a
+    /// fabricated all-zero hash.
+    #[test]
+    fn finalize_migration_run_writes_migration_history_not_zero_hash_upgrade() {
+        let (env, contract_id) = setup();
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::finalize_migration_run(&env, &admin, 1, 2, BASE_TS);
+
+            // Migration history records the run.
+            let migr = UpgradeAuthorization::get_migration_history(&env, 0, 10);
+            assert_eq!(migr.len(), 1);
+            let entry = migr.get(0).unwrap();
+            assert_eq!(entry.from_version, 1);
+            assert_eq!(entry.to_version, 2);
+            assert_eq!(entry.executed_at, BASE_TS);
+            assert_eq!(entry.executor, admin);
+            assert_eq!(UpgradeAuthorization::migration_history_count(&env), 1);
+
+            // Upgrade history must remain empty (no zero-hash pollution).
+            assert_eq!(UpgradeAuthorization::history_count(&env), 0);
+            assert_eq!(UpgradeAuthorization::get_history(&env, 0, 10).len(), 0);
         });
     }
 }

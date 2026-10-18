@@ -222,6 +222,16 @@ impl NftReward {
         migration::NftRewardMigration::get_upgrade_history(&env, offset, limit)
     }
 
+    /// Returns a page of schema-migration history entries (no wasm_hash —
+    /// migrations are not WASM upgrades).
+    pub fn get_migration_history(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<hunty_migration::MigrationHistoryEntry> {
+        migration::NftRewardMigration::get_migration_history(&env, offset, limit)
+    }
+
     pub fn upgrade(
         env: Env,
         admin: Address,
@@ -241,11 +251,10 @@ impl NftReward {
             migration::NftRewardMigration::run_migration(&env, &admin, target_version, dry_run)?;
         if !dry_run && report.succeeded && report.from_version < report.to_version {
             env.events().publish(
-                migration::NftRewardMigration::upgrade_executed_topic(&env),
-                migration::NftRewardMigration::upgrade_executed_event(
+                migration::NftRewardMigration::migration_executed_topic(&env),
+                migration::NftRewardMigration::migration_executed_event(
                     from_version,
                     report.to_version,
-                    &BytesN::from_array(&env, &[0u8; 32]),
                     env.ledger().timestamp(),
                     admin,
                 ),
