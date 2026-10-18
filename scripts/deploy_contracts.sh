@@ -68,8 +68,9 @@ DEPLOYER_ADDRESS=$(stellar keys address "$SOURCE_ACCOUNT")
 # Query native XLM token address for the network
 XLM_TOKEN_ADDRESS=$(stellar contract id asset --asset native --network "$NETWORK")
 
-# Deploy hunty-core first (no constructor args needed)
-HUNTY_CORE_ID="$(deploy_contract hunty_core)"
+# Deploy hunty-core with constructor arg: admin (set atomically at deploy
+# time so initialize_admin cannot be front-run)
+HUNTY_CORE_ID="$(deploy_contract hunty_core "$DEPLOYER_ADDRESS")"
 
 # Deploy reward-manager with constructor args: admin, xlm_token, hunty_core
 REWARD_MANAGER_ID="$(deploy_contract reward_manager \
