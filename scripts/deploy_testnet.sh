@@ -130,6 +130,8 @@ stellar contract invoke \
 log "  nft-reward initialized."
 
 # 2. Initialize reward-manager
+# NOTE: `initialize` is a legacy entry point. On constructor-deployed contracts,
+# admin/xlm_token are set at deploy time and `initialize` returns AlreadyInitialized.
 stellar contract invoke \
   --id "${NEW_IDS[reward-manager]}" \
   --rpc-url "$RPC_URL" \
@@ -138,7 +140,7 @@ stellar contract invoke \
   -- initialize \
   --admin "$ADMIN_ADDRESS" \
   --xlm_token "$XLM_TOKEN_ADDRESS"
-log "  reward-manager initialized."
+log "  reward-manager initialized (legacy)."
 
 # 3. Link nft-reward to reward-manager
 stellar contract invoke \

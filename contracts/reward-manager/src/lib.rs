@@ -269,6 +269,12 @@ impl RewardManager {
 
     /// Initializes the RewardManager with the XLM token contract address (SAC).
     /// Must be called once before any reward distribution.
+    ///
+    /// ## ⚠️ Legacy
+    /// This entry point is kept for backward compatibility. On constructor-deployed
+    /// contracts the admin, token and hunty-core are set at deploy time, so
+    /// `initialize` will return `AlreadyInitialized` and cannot succeed. New
+    /// deployments should use the contract constructor instead.
     pub fn initialize(env: Env, admin: Address, xlm_token: Address) -> Result<(), RewardErrorCode> {
         if Storage::get_xlm_token(&env).is_some() {
             return Err(RewardErrorCode::AlreadyInitialized);

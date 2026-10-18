@@ -251,6 +251,8 @@ export interface Client {
    * Construct and simulate a initialize transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Initializes the RewardManager with the XLM token contract address (SAC).
    * Must be called once before any reward distribution.
+   *
+   * @deprecated Legacy entry point. On constructor-deployed contracts the admin, token and hunty-core are set at deploy time, so `initialize` will return `AlreadyInitialized` and cannot succeed. New deployments should use the contract constructor instead.
    */
   initialize: ({admin, xlm_token}: {admin: string, xlm_token: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
