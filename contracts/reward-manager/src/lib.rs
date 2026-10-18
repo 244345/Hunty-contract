@@ -3892,9 +3892,16 @@ impl RewardManager {
         Storage::get_emergency_logs(&env)
     }
 
-    /// Returns the on-chain version stored during initialize, or the compiled constant.
-    pub fn contract_version(env: Env) -> u32 {
-        Storage::get_contract_version(&env).unwrap_or(Self::CONTRACT_VERSION)
+    /// Returns the compiled `CONTRACT_VERSION` of this WASM build.
+    /// The constructor-time value is kept only as `deployed_version`
+    /// for provenance and must not be used for compatibility checks.
+    pub fn contract_version(_env: Env) -> u32 {
+        Self::CONTRACT_VERSION
+    }
+
+    /// Returns the version stored at deploy/initialize time, if any.
+    pub fn deployed_version(env: Env) -> Option<u32> {
+        Storage::get_contract_version(&env)
     }
 
     /// Returns true if the given NftReward contract meets the minimum required version.
