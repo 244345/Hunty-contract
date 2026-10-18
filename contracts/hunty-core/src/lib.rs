@@ -2462,7 +2462,7 @@ impl HuntyCore {
                     InvokerContractAuthEntry::Contract(SubContractInvocation {
                         context: ContractContext {
                             contract: reward_manager_addr.clone(),
-                            fn_name: Symbol::new(env, "distribute_rewards_authorized"),
+                            fn_name: Symbol::new(env, "distribute_rewards"),
                             args: auth_args,
                         },
                         sub_invocations: soroban_sdk::vec![&env],
@@ -2471,7 +2471,7 @@ impl HuntyCore {
 
                 let result = env.try_invoke_contract::<(), RewardErrorCode>(
                     &reward_manager_addr,
-                    &Symbol::new(env, "distribute_rewards_authorized"),
+                    &Symbol::new(env, "distribute_rewards"),
                     args,
                 );
                 match result {

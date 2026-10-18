@@ -3393,7 +3393,7 @@ mod test {
 
             let result = env.try_invoke_contract::<(), RewardErrorCode>(
                 &contract_id,
-                &Symbol::new(&env, "distribute_rewards_authorized"),
+                &Symbol::new(&env, "distribute_rewards"),
                 args,
             );
             assert_eq!(result, Err(Ok(RewardErrorCode::Unauthorized)));
