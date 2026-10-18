@@ -811,6 +811,13 @@ impl NftReward {
         Storage::get_nft_counter(&env)
     }
 
+    /// Returns the total number of NFTs minted so far.
+    /// Alias for `total_supply`, kept for API compatibility with callers that
+    /// expect a `get_total_supply` entry point.
+    pub fn get_total_supply(env: Env) -> u64 {
+        Storage::get_nft_counter(&env)
+    }
+
     /// Returns the configured maximum total supply of NFTs.
     ///
     /// - `None`  → no cap was set (unlimited minting)
