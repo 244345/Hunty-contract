@@ -38,6 +38,30 @@ function parseArgs(args) {
   return result;
 }
 
+const SENSITIVE_KEYS = new Set([
+  'answer',
+  'invite_code',
+  'invite-code',
+  'secret',
+  'password',
+  'private_key',
+  'private-key',
+  'mnemonic',
+  'seed',
+]);
+
+function redactArgs(args) {
+  const redacted = [];
+  for (let i = 0; i < args.length; i++) {
+    redacted.push(args[i]);
+    if (args[i].startsWith('--') && SENSITIVE_KEYS.has(args[i].substring(2)) && i + 1 < args.length) {
+      redacted.push('[REDACTED]');
+      i++;
+    }
+  }
+  return redacted;
+}
+
 function runInvoke(method, contractArgs, options) {
   if (!options.contract) {
     console.error("Error: --contract is required.");
@@ -59,7 +83,7 @@ function runInvoke(method, contractArgs, options) {
     args.push(`--${key}`, String(val));
   }
 
-  console.log(`Executing: stellar ${args.join(' ')}`);
+  console.log(`Executing: stellar ${redactArgs(args).join(' ')}`);
   try {
     const output = execFileSync('stellar', args, { encoding: 'utf-8' });
     console.log("Result:", output);
