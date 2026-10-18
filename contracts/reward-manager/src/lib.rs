@@ -224,6 +224,16 @@ pub struct GlobalCapChangedEvent {
     pub admin: Address,
 }
 
+/// Event emitted when a pool's daily distribution cap is changed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PoolCapChangedEvent {
+    pub hunt_id: u64,
+    pub old_cap: i128,
+    pub new_cap: i128,
+    pub admin: Address,
+}
+
 /// Event emitted when the configured HuntyCore contract is set or updated.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1942,11 +1952,7 @@ impl RewardManager {
         hunt_id: u64,
         cap: i128,
     ) -> Result<(), RewardErrorCode> {
-        admin.require_auth();
-        let configured_admin = Storage::get_admin(&env).ok_or(RewardErrorCode::NotInitialized)?;
-        if configured_admin != admin {
-            return Err(RewardErrorCode::Unauthorized);
-        }
+        Self::require_admin(&env, &admin)?;
 
         // Reject negative caps - they silently break distributions
         if cap < 0 {
@@ -1956,7 +1962,18 @@ impl RewardManager {
         // Verify the pool exists before setting a cap for it
         Storage::get_pool_config(&env, hunt_id).ok_or(RewardErrorCode::PoolNotFound)?;
 
+        let old_cap = Storage::get_daily_pool_cap(&env, hunt_id);
         Storage::set_daily_pool_cap(&env, hunt_id, cap);
+
+        env.events().publish(
+            (symbol_short!("DPC_SET"),),
+            PoolCapChangedEvent {
+                hunt_id,
+                old_cap,
+                new_cap: cap,
+                admin,
+            },
+        );
         Ok(())
     }
 
