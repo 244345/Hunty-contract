@@ -82,3 +82,45 @@ fn many_pending_mints_remain_indexed_and_removable() {
         assert!(Storage::get_pending_nft_mint(&env, 250, &players.get(250).unwrap()).is_none());
     });
 }
+
+#[test]
+fn legacy_pending_mint_list_migrates_without_loss() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let xlm_token = Address::generate(&env);
+    let hunty_core = Address::generate(&env);
+    let contract_id = env.register(RewardManager, (admin, xlm_token, hunty_core));
+
+    env.as_contract(&contract_id, || {
+        let mut legacy = soroban_sdk::Vec::new(&env);
+        for hunt_id in [41, 42] {
+            let pending = PendingNftMint {
+                hunt_id,
+                player: Address::generate(&env),
+                nft_contract: Address::generate(&env),
+                nft_title: String::from_str(&env, "Reward"),
+                nft_description: String::from_str(&env, "Description"),
+                nft_image_uri: String::from_str(&env, "uri"),
+                nft_hunt_title: String::from_str(&env, "Hunt"),
+                nft_rarity: 0,
+                nft_tier: 0,
+                completion_rank: 0,
+            };
+            legacy.push_back(pending);
+        }
+        env.storage()
+            .persistent()
+            .set(&soroban_sdk::symbol_short!("PNFTLST"), &legacy);
+
+        let migrated = Storage::list_pending_nft_mints(&env, 0, 10);
+        assert_eq!(migrated.len(), 2);
+        assert_eq!(migrated.get(0).unwrap().hunt_id, 41);
+        assert_eq!(migrated.get(1).unwrap().hunt_id, 42);
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&soroban_sdk::symbol_short!("PNFTLST")));
+    });
+}

@@ -61,8 +61,10 @@ impl Storage {
     pub const MAX_PENDING_NFT_PAGE_SIZE: u32 = 50;
 
     pub const PENDING_NFT_KEY: soroban_sdk::Symbol = symbol_short!("PNFT");
+    const LEGACY_PENDING_NFT_LIST_KEY: soroban_sdk::Symbol = symbol_short!("PNFTLST");
     const PENDING_NFT_INDEX_KEY: soroban_sdk::Symbol = symbol_short!("PNFTIDX");
     const PENDING_NFT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("PNFTCNT");
+    const PENDING_NFT_MIGRATED_KEY: soroban_sdk::Symbol = symbol_short!("PNFTMIG");
 
     // ========== Vesting ==========
     const VESTING_KEY: soroban_sdk::Symbol = symbol_short!("VEST");
@@ -785,6 +787,7 @@ impl Storage {
         player: &Address,
         pending: &crate::PendingNftMint,
     ) {
+        Self::migrate_legacy_pending_nft_mints(env);
         let storage = env.storage().persistent();
         storage.set(&Self::pending_nft_key(hunt_id, player), pending);
 
@@ -807,11 +810,13 @@ impl Storage {
         hunt_id: u64,
         player: &Address,
     ) -> Option<crate::PendingNftMint> {
+        Self::migrate_legacy_pending_nft_mints(env);
         let key = Self::pending_nft_key(hunt_id, player);
         env.storage().persistent().get(&key)
     }
 
     pub fn remove_pending_nft_mint(env: &Env, hunt_id: u64, player: &Address) {
+        Self::migrate_legacy_pending_nft_mints(env);
         let storage = env.storage().persistent();
         storage.remove(&Self::pending_nft_key(hunt_id, player));
 
@@ -852,6 +857,7 @@ impl Storage {
         offset: u32,
         limit: u32,
     ) -> Vec<crate::PendingNftMint> {
+        Self::migrate_legacy_pending_nft_mints(env);
         let count = Self::pending_nft_count(env);
         let start = u64::from(offset);
         if start >= count {
@@ -884,6 +890,45 @@ impl Storage {
             .persistent()
             .get(&Self::PENDING_NFT_COUNT_KEY)
             .unwrap_or(0)
+    }
+
+    fn migrate_legacy_pending_nft_mints(env: &Env) {
+        let storage = env.storage().persistent();
+        if storage
+            .get::<_, bool>(&Self::PENDING_NFT_MIGRATED_KEY)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let legacy: Vec<crate::PendingNftMint> = storage
+            .get(&Self::LEGACY_PENDING_NFT_LIST_KEY)
+            .unwrap_or_else(|| Vec::new(env));
+        for pending in legacy {
+            let reverse_key = Self::pending_nft_reverse_key(pending.hunt_id, &pending.player);
+            if storage.has(&reverse_key) {
+                storage.set(
+                    &Self::pending_nft_key(pending.hunt_id, &pending.player),
+                    &pending,
+                );
+                continue;
+            }
+
+            let count = Self::pending_nft_count(env);
+            storage.set(
+                &Self::pending_nft_key(pending.hunt_id, &pending.player),
+                &pending,
+            );
+            storage.set(
+                &Self::pending_nft_index_entry_key(count),
+                &(pending.hunt_id, pending.player.clone()),
+            );
+            storage.set(&reverse_key, &count);
+            storage.set(&Self::PENDING_NFT_COUNT_KEY, &count.saturating_add(1));
+        }
+
+        storage.remove(&Self::LEGACY_PENDING_NFT_LIST_KEY);
+        storage.set(&Self::PENDING_NFT_MIGRATED_KEY, &true);
     }
 
     fn pending_nft_index_entry_key(index: u64) -> (soroban_sdk::Symbol, u64) {
