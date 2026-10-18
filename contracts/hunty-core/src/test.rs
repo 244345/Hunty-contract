@@ -12871,3 +12871,24 @@ fn bench_save_progress_500_players() {
     // (or use a generous fixed ceiling, tuned after your first run)
     assert!(cpu < 5_000_000, "save_player_progress scales with player count: {}", cpu);
 }
+
+#[test]
+fn test_bounded_flat_amount_routes_top_ups_to_later_winners() {
+    use crate::types::bounded_flat_amount;
+    // No top-up: live share equals the activation snapshot.
+    assert_eq!(bounded_flat_amount(10, 100, 10), 10);
+    // Sponsor top-up after activation: live share exceeds the snapshot,
+    // so later winners receive more.
+    assert_eq!(bounded_flat_amount(10, 150, 10), 15);
+    // Partial claims plus top-up: bound uses remaining winners, so the
+    // extra tokens are not stranded.
+    assert_eq!(bounded_flat_amount(10, 100, 5), 20);
+    // Shrunken pool: never silently underpay below the snapshot; the
+    // claim fails closed downstream instead of shortchanging winners.
+    assert_eq!(bounded_flat_amount(10, 50, 10), 10);
+    // Never pay more than the remaining balance in total.
+    assert_eq!(bounded_flat_amount(0, 5, 10), 0);
+    // Degenerate inputs fall back to the snapshot.
+    assert_eq!(bounded_flat_amount(10, 0, 10), 10);
+    assert_eq!(bounded_flat_amount(10, 100, 0), 10);
+}
