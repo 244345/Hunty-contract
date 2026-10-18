@@ -209,7 +209,6 @@ EXPECTED_FUNCTIONS: Dict[str, Set[str]] = {
         "upgrade",
     },
     "nft-reward": {
-        "initialize",
         "get_schema_version",
         "get_upgrade_history",
         "get_upgrade_proposal",

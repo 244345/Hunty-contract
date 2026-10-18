@@ -216,13 +216,6 @@ export interface Client {
   get_admin: (options?: MethodOptions) => Promise<AssembledTransaction<Option<string>>>
 
   /**
-   * Construct and simulate a initialize transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Initializes the NFT reward contract with an admin address and optional max supply cap.
-   * Call this once to set the admin who can manage the contract.
-   */
-  initialize: ({admin, max_supply}: {admin: string, max_supply: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>
-
-  /**
    * Construct and simulate an is_operator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Returns true if `operator` is approved to manage all NFTs of `owner`.
    */
@@ -402,25 +395,6 @@ export class Client extends ContractClient {
       "outputs": [
         {
           "type": "option"
-        }
-      ]
-    },
-    {
-      "type": "function",
-      "name": "initialize",
-      "inputs": [
-        {
-          "name": "admin",
-          "type": "address"
-        },
-        {
-          "name": "max_supply",
-          "type": "option"
-        }
-      ],
-      "outputs": [
-        {
-          "type": "result"
         }
       ]
     },

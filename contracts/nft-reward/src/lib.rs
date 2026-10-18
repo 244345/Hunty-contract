@@ -124,22 +124,6 @@ impl NftReward {
             .set(&symbol_short!("NFTCNT"), &0u64);
     }
 
-    pub fn initialize(
-        _env: Env,
-        _admin: Address,
-        _minter: Address,
-        _max_supply: Option<u64>,
-        _metadata: CollectionMetadata,
-    ) -> Result<(), NftErrorCode> {
-        // @deprecated Use constructor during deployment instead.
-        // This function is kept for backward compatibility but should not be used.
-        Err(NftErrorCode::AlreadyInitialized)
-    }
-
-    pub fn initialize_admin(_env: Env, _admin: Address) -> Result<(), NftErrorCode> {
-        Err(NftErrorCode::AlreadyInitialized)
-    }
-
     pub fn set_reward_manager(
         _env: Env,
         _admin: Address,
