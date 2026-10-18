@@ -3939,6 +3939,14 @@ impl RewardManager {
         Ok(proposal)
     }
 
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::RewardManagerMigration::cancel_upgrade(&env, &admin)?;
+        Ok(proposal)
+    }
+
     pub fn upgrade(
         env: Env,
         admin: Address,
