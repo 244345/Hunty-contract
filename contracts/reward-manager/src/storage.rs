@@ -58,6 +58,7 @@ impl Storage {
     const POOL_FUNDERS_KEY: soroban_sdk::Symbol = symbol_short!("PFNDRS");
     /// Per-(hunt_id, funder) cumulative amount contributed and not yet refunded.
     const POOL_FUNDER_CONTRIB_KEY: soroban_sdk::Symbol = symbol_short!("PFCONT");
+    pub const MAX_PENDING_NFT_PAGE_SIZE: u32 = 50;
 
     pub const PENDING_NFT_KEY: soroban_sdk::Symbol = symbol_short!("PNFT");
     const PENDING_NFT_LIST_KEY: soroban_sdk::Symbol = symbol_short!("PNFTLST");
@@ -207,7 +208,8 @@ impl Storage {
             return Vec::new(env);
         }
 
-        let end_index = core::cmp::min(offset + limit, total);
+        let bounded_limit = core::cmp::min(limit, Self::MAX_PENDING_NFT_PAGE_SIZE);
+        let end_index = core::cmp::min(offset.saturating_add(bounded_limit), total);
         let mut result = Vec::new(env);
         for i in offset..end_index {
             if let Some(distribution) = all_distributions.get(i) {
