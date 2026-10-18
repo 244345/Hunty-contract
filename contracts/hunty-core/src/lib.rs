@@ -2812,6 +2812,11 @@ impl HuntyCore {
         }
 
         hunt.is_private = is_private;
+        if !is_private {
+            // Clear the stale code so re-privatizing later cannot
+            // silently re-enable an old (possibly shared) code.
+            hunt.invite_code_hash = None;
+        }
         Storage::save_hunt(&env, &hunt);
 
         let current_time = env.ledger().timestamp();
