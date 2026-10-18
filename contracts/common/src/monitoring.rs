@@ -1,17 +1,20 @@
 #![allow(deprecated)]
 
-use soroban_sdk::{contracttype, symbol_short, Env, Map, String, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, String, Vec};
 
 const INVOCATIONS_KEY: soroban_sdk::Symbol = symbol_short!("INVCT");
 const FAILURES_KEY: soroban_sdk::Symbol = symbol_short!("FAILCT");
 const GAS_UNITS_KEY: soroban_sdk::Symbol = symbol_short!("GASUN");
 const ALERTS_KEY: soroban_sdk::Symbol = symbol_short!("ALERT");
+const LARGE_WD_THRESHOLD_MAP: soroban_sdk::Symbol = symbol_short!("LGWDMAP");
 /// Per-kind alert counters: `Map<alert_type, HealthAlert>`.
 const ALERT_MAP_KEY: soroban_sdk::Symbol = symbol_short!("ALERTMAP");
 
-/// Large withdrawal alert threshold: 100 XLM (1_000_000_000 stroops)
-/// Triggers monitoring alert for withdrawals exceeding this amount.
-/// 1 XLM = 10_000_000 stroops (Stellar's base unit)
+/// Default large-withdrawal alert threshold, calibrated for the native XLM
+/// token: 100 XLM (1_000_000_000 stroops; 1 XLM = 10_000_000 stroops).
+/// Other tokens MUST configure their own threshold via
+/// `set_large_withdrawal_threshold`: amounts are raw token units, so a
+/// stroop-denominated constant is meaningless for non-XLM assets.
 const LARGE_WITHDRAWAL_THRESHOLD: i128 = 1_000_000_000;
 
 #[contracttype]
@@ -71,8 +74,41 @@ impl Monitoring {
         Self::record_invocation_event(env, gas_units, succeeded);
     }
 
+    /// Native-token threshold check. Only meaningful for XLM-denominated
+    /// amounts; prefer `record_large_withdrawal_for_token` with an explicit
+    /// token so per-token thresholds apply.
     pub fn record_large_withdrawal(env: &Env, amount: i128) {
         if amount > LARGE_WITHDRAWAL_THRESHOLD {
+            Self::raise_alert(env, "large_withdrawal");
+        }
+    }
+
+    /// Admin-configurable per-token threshold (raw token units). Callers are
+    /// responsible for gating this behind their own admin auth.
+    pub fn set_large_withdrawal_threshold(env: &Env, token: &Address, threshold: i128) {
+        let mut thresholds: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&LARGE_WD_THRESHOLD_MAP)
+            .unwrap_or_else(|| Map::new(env));
+        thresholds.set(token.clone(), threshold);
+        env.storage()
+            .instance()
+            .set(&LARGE_WD_THRESHOLD_MAP, &thresholds);
+    }
+
+    /// Effective threshold for a token: configured value, else the XLM default.
+    pub fn get_large_withdrawal_threshold(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .instance()
+            .get::<_, Map<Address, i128>>(&LARGE_WD_THRESHOLD_MAP)
+            .and_then(|m| m.get(token.clone()))
+            .unwrap_or(LARGE_WITHDRAWAL_THRESHOLD)
+    }
+
+    /// Token-aware large-withdrawal check using the per-token threshold.
+    pub fn record_large_withdrawal_for_token(env: &Env, token: &Address, amount: i128) {
+        if amount > Self::get_large_withdrawal_threshold(env, token) {
             Self::raise_alert(env, "large_withdrawal");
         }
     }

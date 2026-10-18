@@ -569,6 +569,23 @@ impl RewardManager {
         Ok(())
     }
 
+    /// Sets the large-withdrawal alert threshold for a specific token
+    /// (raw token units). Only the contract admin can call this. Tokens
+    /// without a configured threshold fall back to the XLM-calibrated
+    /// default, so non-XLM pools should set their own value.
+    pub fn set_large_withdrawal_threshold(
+        env: Env,
+        admin: Address,
+        token: Address,
+        threshold: i128,
+    ) -> Result<(), RewardErrorCode> {
+        Self::require_admin(&env, &admin)?;
+        hunty_common::monitoring::Monitoring::set_large_withdrawal_threshold(
+            &env, &token, threshold,
+        );
+        Ok(())
+    }
+
     /// Creates a reward pool for a specific hunt with a specified token.
     ///
     /// Must be called before `fund_reward_pool`. Any address may fund the pool
@@ -3505,10 +3522,12 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, amount);
-        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
-
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
+
+        hunty_common::monitoring::Monitoring::record_large_withdrawal_for_token(
+            &env, &xlm_token, amount,
+        );
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let contract_addr = env.current_contract_address();
         let client = soroban_sdk::token::Client::new(&env, &xlm_token);
@@ -3600,10 +3619,12 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, balance);
-        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
-
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
+
+        hunty_common::monitoring::Monitoring::record_large_withdrawal_for_token(
+            &env, &xlm_token, balance,
+        );
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let contract_addr = env.current_contract_address();
         let client = soroban_sdk::token::Client::new(&env, &xlm_token);
