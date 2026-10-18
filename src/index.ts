@@ -33,6 +33,15 @@ export function createApp({ config, limiter }: AppDeps): express.Express {
 
   app.use('/mint', globalLimiter);
 
+  const adminLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  app.use('/admin', adminLimiter);
+
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', ...publicConfig(config) });
   });
