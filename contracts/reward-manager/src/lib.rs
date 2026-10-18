@@ -301,7 +301,13 @@ pub struct EmergencyWithdrawalLogEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolAuditLogResponse {
     pub entries: Vec<PoolAuditEntry>,
+    /// Lifetime number of entries ever appended for this pool, including
+    /// entries already evicted from the retained ring-buffer window.
     pub total: u64,
+    /// Number of entries currently retained (never larger than the
+    /// ring-buffer capacity). Page `offset` runs from 0 to `retained`;
+    /// `total` may exceed `retained` once the buffer has wrapped.
+    pub retained: u64,
 }
 
 /// Event emitted when a vesting schedule is created for a player.
@@ -4105,29 +4111,39 @@ impl RewardManager {
     }
 
     /// Exposes a paginated read query for the audit log of a given pool.
+    ///
+    /// `offset` is a 0-based index into the retained rolling window (not a
+    /// sequence cursor): valid offsets run from 0 to `retained`. `total` is
+    /// the lifetime append count and may exceed `retained` once the ring
+    /// buffer has wrapped, so clients must page until
+    /// `offset >= retained`, not `offset >= total`.
     pub fn get_pool_audit_log(
         env: Env,
         hunt_id: u64,
-        start_after: Option<u64>,
+        offset: Option<u64>,
         limit: Option<u32>,
     ) -> PoolAuditLogResponse {
-        // `start_after` is an offset within the retained rolling window. This
-        // keeps pagination stable even when the ring buffer has wrapped.
+        // `offset` indexes into the retained rolling window. This keeps
+        // pagination stable even when the ring buffer has wrapped.
         let default_limit = 20;
         let max_limit = Storage::MAX_AUDIT_ENTRIES_PER_POOL as u32;
         let query_limit = limit.unwrap_or(default_limit).min(max_limit) as u64;
         let total = Storage::get_pool_audit_count(&env, hunt_id);
         let mut entries = Vec::new(&env);
 
+        let capacity = Storage::MAX_AUDIT_ENTRIES_PER_POOL;
+        let retained = total.min(capacity);
         if total == 0 || query_limit == 0 {
-            return PoolAuditLogResponse { entries, total };
+            return PoolAuditLogResponse {
+                entries,
+                total,
+                retained,
+            };
         }
 
-        let capacity = Storage::MAX_AUDIT_ENTRIES_PER_POOL;
-        let window_len = total.min(capacity);
-        let oldest = total.saturating_sub(window_len);
-        let offset = start_after.unwrap_or(0).min(window_len);
-        let first = oldest.saturating_add(offset);
+        let oldest = total.saturating_sub(retained);
+        let start = offset.unwrap_or(0).min(retained);
+        let first = oldest.saturating_add(start);
         let end = total.min(first.saturating_add(query_limit));
         let mut sequence = first;
         while sequence < end {
@@ -4137,7 +4153,11 @@ impl RewardManager {
             sequence = sequence.saturating_add(1);
         }
 
-        PoolAuditLogResponse { entries, total }
+        PoolAuditLogResponse {
+            entries,
+            total,
+            retained,
+        }
     }
 }
 
