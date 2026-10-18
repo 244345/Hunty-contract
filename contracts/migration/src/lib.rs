@@ -13,6 +13,14 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 /// itself can never be set below it.
 pub const MIN_UPGRADE_TIMELOCK_SECONDS: u64 = 86_400; // 24 hours
 
+/// Maximum number of upgrade history entries returned in a single call.
+///
+/// This prevents resource exhaustion when callers pass `u32::MAX` or other
+/// large values. Both reward-manager and nft-reward previously clamped at 50
+/// in their respective wrappers; centralizing the bound here ensures every
+/// contract using `UpgradeAuthorization::get_history` enforces the same limit.
+pub const MAX_HISTORY_PAGE_SIZE: u32 = 50;
+
 pub const VERSION_KEY: Symbol = symbol_short!("SCHEMA");
 pub const ROLLBACK_KEY: Symbol = symbol_short!("RBKVER");
 const PROPOSAL_KEY: Symbol = symbol_short!("UPROP");
@@ -97,6 +105,16 @@ pub struct UpgradeExecutedEvent {
     pub wasm_hash: BytesN<32>,
     pub executed_at: u64,
     pub executor: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeCancelledEvent {
+    pub cancelled_at: u64,
+    pub proposer: Address,
+    pub cancelled_by: Address,
+    pub target_version: u32,
+    pub wasm_hash: BytesN<32>,
 }
 
 pub struct MigrationFramework;
@@ -297,6 +315,21 @@ impl UpgradeAuthorization {
         env.storage().instance().remove(&PROPOSAL_KEY);
     }
 
+    /// Cancels a pending upgrade proposal.
+    ///
+    /// Requires admin authorization. Returns the cancelled proposal if one existed,
+    /// or `UpgradeAuthError::NoProposal` if no proposal was pending.
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+        configured_admin: Option<Address>,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        Self::require_admin(env, admin, configured_admin)?;
+        let proposal = Self::get_proposal(env).ok_or(UpgradeAuthError::NoProposal)?;
+        env.storage().instance().remove(&PROPOSAL_KEY);
+        Ok(proposal)
+    }
+
     pub fn validate_execution(
         env: &Env,
         target_version: u32,
@@ -328,11 +361,12 @@ impl UpgradeAuthorization {
     }
 
     pub fn get_history(env: &Env, offset: u32, limit: u32) -> Vec<UpgradeHistoryEntry> {
+        let capped_limit = limit.min(MAX_HISTORY_PAGE_SIZE);
         let count: u32 = env.storage().persistent().get(&HIST_COUNT_KEY).unwrap_or(0);
         if offset >= count {
             return Vec::new(env);
         }
-        let end = offset.saturating_add(limit).min(count);
+        let end = offset.saturating_add(capped_limit).min(count);
         let mut entries = Vec::new(env);
         for i in offset..end {
             let key = (symbol_short!("UPHIS"), i);
@@ -875,6 +909,139 @@ mod tests {
             assert_eq!(entry.wasm_hash, hash_a);
             assert_eq!(entry.executed_at, proposal.effective_at);
             assert_eq!(entry.executor, admin);
+        });
+    }
+
+    /// Issue #1300: get_history caps limit at MAX_HISTORY_PAGE_SIZE (50).
+    #[test]
+    fn test_8_get_history_caps_limit() {
+        let (env, contract_id) = setup();
+        let admin = Address::generate(&env);
+        let hash = dummy_hash(&env);
+
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
+                .unwrap();
+
+            // Record 60 upgrade executions (each finalize_upgrade_run adds one).
+            for i in 0..60 {
+                let ts = BASE_TS + MIN_UPGRADE_TIMELOCK_SECONDS + i;
+                set_time(&env, ts);
+                UpgradeAuthorization::finalize_upgrade_run(
+                    &env,
+                    &admin,
+                    i,
+                    i + 1,
+                    &hash,
+                    ts,
+                );
+            }
+
+            // 1. limit = u32::MAX should return at most 50 entries.
+            let first_page = UpgradeAuthorization::get_history(&env, 0, u32::MAX);
+            assert_eq!(first_page.len() as u32, MAX_HISTORY_PAGE_SIZE);
+
+            // 2. offset = 50 should return the remaining 10 entries in order.
+            let second_page = UpgradeAuthorization::get_history(&env, 50, u32::MAX);
+            assert_eq!(second_page.len(), 10);
+            for (idx, entry) in second_page.iter().enumerate() {
+                let expected_version = 50 + idx as u32;
+                assert_eq!(entry.from_version, expected_version);
+                assert_eq!(entry.to_version, expected_version + 1);
+            }
+
+            // 3. Small limit (e.g., 5) should be unchanged.
+            let small_page = UpgradeAuthorization::get_history(&env, 0, 5);
+            assert_eq!(small_page.len(), 5);
+        });
+    }
+
+    /// Issue #1301: cancel_upgrade allows admin to clear a pending proposal.
+    #[test]
+    fn test_9_cancel_upgrade_clears_pending_proposal() {
+        let (env, contract_id) = setup();
+        let admin = Address::generate(&env);
+        let hash_a = BytesN::from_array(&env, &[0xAA; 32]);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
+                .unwrap();
+
+            // Propose an upgrade
+            let proposal = UpgradeAuthorization::propose_upgrade(
+                &env,
+                &admin,
+                TARGET,
+                hash_a.clone(),
+                BASE_TS,
+            )
+            .unwrap();
+            assert_eq!(proposal.target_version, TARGET);
+            assert_eq!(proposal.wasm_hash, hash_a);
+
+            // Cancel the proposal
+            let cancelled = UpgradeAuthorization::cancel_upgrade(
+                &env,
+                &admin,
+                Some(admin.clone()),
+            )
+            .unwrap();
+            assert_eq!(cancelled.target_version, TARGET);
+            assert_eq!(cancelled.wasm_hash, hash_a);
+            assert_eq!(cancelled.proposer, admin);
+
+            // Verify proposal is cleared
+            assert!(UpgradeAuthorization::get_proposal(&env).is_none());
+        });
+    }
+
+    #[test]
+    fn test_10_cancel_upgrade_unauthorized_fails() {
+        let (env, contract_id) = setup();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let hash_a = BytesN::from_array(&env, &[0xAA; 32]);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
+                .unwrap();
+
+            // Propose an upgrade
+            UpgradeAuthorization::propose_upgrade(
+                &env,
+                &admin,
+                TARGET,
+                hash_a.clone(),
+                BASE_TS,
+            )
+            .unwrap();
+
+            // Non-admin cannot cancel
+            assert_eq!(
+                UpgradeAuthorization::cancel_upgrade(&env, &non_admin, Some(admin.clone())),
+                Err(UpgradeAuthError::Unauthorized)
+            );
+
+            // Proposal still exists
+            assert!(UpgradeAuthorization::get_proposal(&env).is_some());
+        });
+    }
+
+    #[test]
+    fn test_11_cancel_upgrade_no_proposal_fails() {
+        let (env, contract_id) = setup();
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
+                .unwrap();
+
+            // No proposal exists, cancel should fail
+            assert_eq!(
+                UpgradeAuthorization::cancel_upgrade(&env, &admin, Some(admin.clone())),
+                Err(UpgradeAuthError::NoProposal)
+            );
         });
     }
 }
