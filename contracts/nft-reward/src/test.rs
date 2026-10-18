@@ -1406,3 +1406,44 @@ fn test_search_nfts_no_matches() {
 
     assert_eq!(results.len(), 0);
 }
+
+#[test]
+fn test_mint_returns_distinct_ids_for_two_winners() {
+    // Issue #1291 — every reward mint must report a unique, persisted nft_id.
+    // Minting for two different winners must produce two distinct ids; indexers
+    // and RewardManager must never observe thousands of players "owning" NFT #1.
+    let env = setup_env();
+    let (client, minter) = setup_nft_reward(&env, None);
+
+    let player_a = Address::generate(&env);
+    let player_b = Address::generate(&env);
+
+    let meta_a = create_metadata(&env, "Winner A", "desc", "ipfs://a");
+    let meta_b = create_metadata(&env, "Winner B", "desc", "ipfs://b");
+
+    let id_a = client.mint_reward_nft(&minter, &1, &player_a, &meta_a);
+    let id_b = client.mint_reward_nft(&minter, &1, &player_b, &meta_b);
+
+    // Distinct winners must receive distinct, persisted ids.
+    assert_ne!(id_a, id_b, "two different mints must not return the same nft_id");
+
+    // Each minted NFT must be retrievable by its own id (not None).
+    let nft_a = client.get_nft(&id_a);
+    let nft_b = client.get_nft(&id_b);
+    assert!(nft_a.is_some(), "minted NFT id_a must be retrievable");
+    assert!(nft_b.is_some(), "minted NFT id_b must be retrievable");
+    assert_eq!(
+        nft_a.unwrap().owner,
+        player_a,
+        "NFT id_a must belong to player_a"
+    );
+    assert_eq!(
+        nft_b.unwrap().owner,
+        player_b,
+        "NFT id_b must belong to player_b"
+    );
+
+    // Total supply must reflect both mints.
+    assert_eq!(client.total_supply(&env), 2);
+}
+
