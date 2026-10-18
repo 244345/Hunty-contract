@@ -4,13 +4,15 @@ use hunty_migration::{
     MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
     UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, Symbol};
 
 pub use hunty_migration::MigrationReport;
 
 /// Per-contract migration steps for NftReward storage layouts.
+#[allow(dead_code)]
 pub struct NftRewardMigration;
 
+#[allow(dead_code)]
 impl NftRewardMigration {
     pub fn get_schema_version(env: &Env) -> u32 {
         MigrationFramework::detect_version(env)
@@ -27,6 +29,7 @@ impl NftRewardMigration {
         env: &Env,
         admin: &Address,
         target_version: u32,
+        wasm_hash: BytesN<32>,
     ) -> Result<UpgradeProposal, UpgradeAuthError> {
         UpgradeAuthorization::require_admin(
             env,
@@ -34,10 +37,52 @@ impl NftRewardMigration {
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
         let now = env.ledger().timestamp();
-        let proposal = UpgradeAuthorization::propose_upgrade(env, admin, target_version, now);
-        Ok(proposal)
+        UpgradeAuthorization::propose_upgrade(env, admin, target_version, wasm_hash, now)
     }
 
+    pub fn upgrade(
+        env: &Env,
+        admin: &Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::validate_upgrade(env, &new_wasm_hash, now)?;
+        let from_version = MigrationFramework::detect_version(env);
+        let to_version = proposal.target_version;
+
+        MigrationFramework::set_version(env, to_version);
+        UpgradeAuthorization::finalize_upgrade_run(
+            env,
+            admin,
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+        );
+
+        let event = Self::upgrade_executed_event(
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+            admin.clone(),
+        );
+        env.events().publish(Self::upgrade_executed_topic(env), event);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    /// Sets the upgrade timelock to `delay_seconds`.
+    ///
+    /// Rejects values below `MIN_UPGRADE_TIMELOCK_SECONDS` (24 hours). Timelock
+    /// reductions only take effect after the current timelock elapses, so users
+    /// keep the warning window they were promised.
     pub fn set_upgrade_timelock(
         env: &Env,
         admin: &Address,
@@ -48,8 +93,8 @@ impl NftRewardMigration {
             admin,
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
-        UpgradeAuthorization::set_timelock_seconds(env, delay_seconds);
-        Ok(())
+        let now = env.ledger().timestamp();
+        UpgradeAuthorization::set_timelock_seconds(env, now, delay_seconds)
     }
 
     pub fn get_upgrade_proposal(env: &Env) -> Option<UpgradeProposal> {
@@ -60,12 +105,19 @@ impl NftRewardMigration {
         UpgradeAuthorization::get_timelock_seconds(env)
     }
 
+    /// Returns the pending timelock reduction, if one is queued.
+    #[allow(dead_code)]
+    pub fn get_pending_timelock_change(env: &Env) -> Option<hunty_migration::TimelockChange> {
+        UpgradeAuthorization::get_pending_timelock_change(env)
+    }
+
     pub fn get_upgrade_history(
         env: &Env,
         offset: u32,
         limit: u32,
     ) -> soroban_sdk::Vec<UpgradeHistoryEntry> {
-        UpgradeAuthorization::get_history(env, offset, limit)
+        let bounded_limit = limit.min(50);
+        UpgradeAuthorization::get_history(env, offset, bounded_limit)
     }
 
     /// Runs migrations up to `target_version`. When `dry_run` is true, no storage writes occur.
@@ -113,12 +165,10 @@ impl NftRewardMigration {
                     }
                     current = 1;
                 }
-                1 => {
-                    if !dry_run {
-                        Self::migrate_v1_to_v2(env);
-                    }
-                    current = 2;
-                }
+                // v1 -> v2: not yet implemented.
+                // Add the arm here (and the migrate_v1_to_v2 fn below) once
+                // the new metadata storage layout is defined. Until then the
+                // `_ =>` catchall correctly refuses to bump the version counter.
                 _ => {
                     return Ok(MigrationFramework::build_report(
                         env,
@@ -178,6 +228,7 @@ impl NftRewardMigration {
     pub fn upgrade_proposed_event(proposal: &UpgradeProposal) -> UpgradeProposedEvent {
         UpgradeProposedEvent {
             target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
             proposed_at: proposal.proposed_at,
             effective_at: proposal.effective_at,
             proposer: proposal.proposer.clone(),
@@ -187,12 +238,14 @@ impl NftRewardMigration {
     pub fn upgrade_executed_event(
         from_version: u32,
         to_version: u32,
+        wasm_hash: &BytesN<32>,
         executed_at: u64,
         executor: Address,
     ) -> UpgradeExecutedEvent {
         UpgradeExecutedEvent {
             from_version,
             to_version,
+            wasm_hash: wasm_hash.clone(),
             executed_at,
             executor,
         }
@@ -218,6 +271,11 @@ impl NftRewardMigration {
         }
     }
 
-    /// v1 -> v2: placeholder for future metadata layout changes.
-    fn migrate_v1_to_v2(_env: &Env) {}
+    // v1 -> v2: NOT YET IMPLEMENTED.
+    // Define migrate_v1_to_v2(env: &Env) here and add the corresponding
+    // `1 => { ... current = 2; }` arm to run_migration once the new
+    // metadata layout and transformation logic are ready.
+    // Until then this step intentionally does not exist so run_migration
+    // rejects any attempt to target version 2 rather than silently
+    // bumping the stored schema counter without touching any data.
 }

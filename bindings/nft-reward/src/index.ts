@@ -34,6 +34,7 @@ if (typeof window !== "undefined") {
 
 
 
+
 /**
  * NFT data structure stored on-chain.
  */
@@ -57,27 +58,27 @@ export interface NftMetadata {
  * Original creator of the NFT (stamped at mint time for provenance/attribution).
  * Essential for secondary market royalty distribution and creator attribution.
  */
-creator: Option<string>;
+ creator: Option<string>;
   description: string;
   /**
  * Hunt title at time of mint (for context/display).
  */
-hunt_title: string;
-  image_uri: string;
+ hunt_title: string;
+ image_uri: string;
   /**
  * Rarity tier: 0 = default, 1 = common, 2 = uncommon, 3 = rare, 4 = epic, 5 = legendary.
  */
-rarity: u32;
+ rarity: u32;
   /**
  * Royalty in basis points (1 bp = 0.01%). For example, 250 = 2.5% royalty.
  * Used for secondary market sales to provide ongoing creator revenue.
  */
-royalty_bps: Option<u32>;
-  /**
+ royalty_bps: Option<u32>;
+ /**
  * Custom tier for special categories (0 = none).
  */
-tier: u32;
-  title: string;
+ tier: u32;
+ title: string;
 }
 
 
@@ -155,16 +156,25 @@ export interface AdminImageUrisUpdatedEvent {
 }
 
 export const NftErrorCode = {
-  1: {message:"NftNotFound"},
-  2: {message:"Unauthorized"},
-  3: {message:"NotOwner"},
-  4: {message:"InvalidRecipient"},
-  5: {message:"SoulboundNft"},
-  6: {message:"InvalidRarity"},
-  7: {message:"AlreadyInitialized"},
-  8: {message:"MaxSupplyReached"},
-  9: {message:"NotInitialized"},
-  10: {message:"NotOperator"}
+  3001: {message:"NftNotFound"},
+  3002: {message:"Unauthorized"},
+  3003: {message:"NotOwner"},
+  3004: {message:"InvalidRecipient"},
+  3005: {message:"SoulboundNft"},
+  3006: {message:"InvalidRarity"},
+  3007: {message:"AlreadyInitialized"},
+  3008: {message:"MaxSupplyReached"},
+  3009: {message:"NotInitialized"},
+  3010: {message:"NotOperator"},
+  3011: {message:"NftNotTransferable"},
+  3012: {message:"NftLocked"},
+  3013: {message:"InvalidMetadata"},
+  3014: {message:"MetadataFrozen"},
+  3015: {message:"TooManyExtensions"},
+  3016: {message:"InvalidExtensionKey"},
+  3017: {message:"InvalidExtensionValue"},
+  3018: {message:"ExtensionNotFound"},
+  3019: {message:"InvalidMaxSupply"}
 }
 
 
@@ -185,7 +195,7 @@ export interface Client {
    * # Authorization
    * The `owner` must authorize this call. The caller must also be the current owner.
    */
-  burn: ({nft_id, owner}: {nft_id: u64, owner: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+  burn: ({nft_id, owner}: {nft_id: u64, owner: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>
 
   /**
    * Construct and simulate a get_nft transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -210,10 +220,10 @@ export interface Client {
    * Initializes the NFT reward contract with an admin address and optional max supply cap.
    * Call this once to set the admin who can manage the contract.
    */
-  initialize: ({admin, max_supply}: {admin: string, max_supply: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+  initialize: ({admin, max_supply}: {admin: string, max_supply: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>
 
   /**
-   * Construct and simulate a is_operator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Construct and simulate an is_operator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Returns true if `operator` is approved to manage all NFTs of `owner`.
    */
   is_operator: ({owner, operator}: {owner: string, operator: string}, options?: MethodOptions) => Promise<AssembledTransaction<boolean>>
@@ -257,12 +267,6 @@ export interface Client {
   transfer_nft: ({nft_id, from_address, to_address, caller}: {nft_id: u64, from_address: string, to_address: string, caller: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
-   * Construct and simulate a get_nft_owner transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Alias for owner_of. Returns the owner of an NFT.
-   */
-  get_nft_owner: ({nft_id}: {nft_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Option<string>>>
-
-  /**
    * Construct and simulate a run_migration transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    */
   run_migration: ({admin, target_version, dry_run}: {admin: string, target_version: u32, dry_run: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<MigrationReport>>
@@ -296,211 +300,424 @@ export interface Client {
    * # Returns
    * The unique NFT ID of the minted NFT
    */
-  mint_reward_nft: ({_minter, hunt_id, player_address, metadata}: {_minter: string, hunt_id: u64, player_address: string, metadata: NftMetadata}, options?: MethodOptions) => Promise<AssembledTransaction<u64>>
+  mint_reward_nft: ({_minter, hunt_id, player_address, metadata}: {_minter: string, hunt_id: u64, player_address: string, metadata: NftMetadata}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
-   * Construct and simulate a remove_operator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Revokes operator approval for `operator` over `owner`'s NFTs.
+   * Construct and simulate a search_nfts_by_metadata transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Searches NFTs matching metadata criteria with a bounded scan and cursor.
    * 
-   * # Authorization
-   * `owner` must authorize this call.
+   * Scans at most `MAX_SCAN_LIMIT` NFT records starting from `cursor` and
+   * returns the matching IDs along with the next cursor (or `None` when the
+   * scan is complete). Callers paginate by passing the returned cursor back in
+   * until it is `none`.
    */
-  remove_operator: ({owner, operator}: {owner: string, operator: string}, options?: MethodOptions) => Promise<AssembledTransaction<null>>
-
-  /**
-   * Construct and simulate a contract_version transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Returns the on-chain version stored during initialize, or the compiled constant.
-   */
-  contract_version: (options?: MethodOptions) => Promise<AssembledTransaction<u32>>
-
-  /**
-   * Construct and simulate a get_nft_metadata transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Returns complete metadata for an NFT, including hunt info and completion details.
-   */
-  get_nft_metadata: ({nft_id}: {nft_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Option<NftMetadataResponse>>>
-
-  /**
-   * Construct and simulate a search_by_rarity transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Searches NFTs by rarity tier.
-   */
-  search_by_rarity: ({rarity}: {rarity: u32}, options?: MethodOptions) => Promise<AssembledTransaction<Array<u64>>>
-
-  /**
-   * Construct and simulate a verify_ownership transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Verifies whether `address` is the current owner of `nft_id`.
-   * Returns `true` when the NFT exists and the stored owner equals `address`.
-   */
-  verify_ownership: ({address, nft_id}: {address: string, nft_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<boolean>>
-
-  /**
-   * Construct and simulate a initialize_schema transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   */
-  initialize_schema: ({admin}: {admin: string}, options?: MethodOptions) => Promise<AssembledTransaction<null>>
-
-  /**
-   * Construct and simulate a search_by_hunt_id transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Searches NFTs by hunt_id.
-   */
-  search_by_hunt_id: ({hunt_id}: {hunt_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Array<u64>>>
-
-  /**
-   * Construct and simulate a get_schema_version transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   */
-  get_schema_version: (options?: MethodOptions) => Promise<AssembledTransaction<u32>>
-
-  /**
-   * Construct and simulate a rollback_migration transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   */
-  rollback_migration: ({admin}: {admin: string}, options?: MethodOptions) => Promise<AssembledTransaction<Option<MigrationReport>>>
-
-  /**
-   * Construct and simulate a set_reward_manager transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Sets the RewardManager contract address. Only the admin can call this.
-   */
-  set_reward_manager: ({admin, reward_manager}: {admin: string, reward_manager: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
-
-  /**
-   * Construct and simulate a update_nft_metadata transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Updates mutable metadata fields (description, image_uri). Owner only.
-   * Title, hunt info, and attributes remain immutable for collectibility.
-   */
-  update_nft_metadata: ({nft_id, updater, new_description, new_image_uri}: {nft_id: u64, updater: string, new_description: string, new_image_uri: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
-
-  /**
-   * Construct and simulate a search_by_rarity_range transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Searches NFTs by rarity range (inclusive).
-   */
-  search_by_rarity_range: ({min_rarity, max_rarity}: {min_rarity: u32, max_rarity: u32}, options?: MethodOptions) => Promise<AssembledTransaction<Array<u64>>>
-
-  /**
-   * Construct and simulate a admin_update_image_uris transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Batch-updates image URIs for all NFTs whose `image_uri` starts with `old_prefix`,
-   * replacing it with `new_prefix`. Useful for migrating between IPFS gateways or CDNs.
-   * 
-   * # Authorization
-   * Only the configured admin can call this function.
-   * 
-   * # Arguments
-   * * `admin` - The admin address (must match the stored admin)
-   * * `old_prefix` - The prefix to match (e.g. "ipfs://oldgateway/")
-   * * `new_prefix` - The replacement prefix (e.g. "ipfs://newgateway/")
-   * 
-   * # Returns
-   * The number of NFTs whose image URIs were updated.
-   */
-  admin_update_image_uris: ({admin, old_prefix, new_prefix}: {admin: string, old_prefix: string, new_prefix: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u32>>>
-
-  /**
-   * Construct and simulate a mint_reward_nft_from_map transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Mints a reward NFT from a generic metadata map. This is the entrypoint
-   * used by cross-contract callers (e.g. RewardManager) that cannot depend
-   * on this crate's `NftMetadata` type directly.
-   * 
-   * `minter` is the calling contract's address and must be whitelisted when the
-   * contract has been initialized.
-   * 
-   * Expected keys in `metadata` (all optional, with sensible defaults):
-   * - "title": String
-   * - "description": String
-   * - "image_uri": String
-   * - "hunt_title": String (defaults to title when omitted/empty)
-   * - "rarity": u32
-   * - "tier": u32
-   * - "creator": Address (defaults to player_address if omitted)
-   * - "royalty_bps": u32 (optional, basis points for royalty percentage)
-   * - "transferable": bool
-   */
-  mint_reward_nft_from_map: ({_minter, hunt_id, player_address, metadata}: {_minter: string, hunt_id: u64, player_address: string, metadata: Map<string, any>}, options?: MethodOptions) => Promise<AssembledTransaction<u64>>
-
+  search_nfts_by_metadata: ({title_contains, creator, cursor, limit}: {title_contains: Option<string>, creator: Option<string>, cursor: Option<u64>, limit: u32}, options?: MethodOptions) => Promise<AssembledTransaction<MetadataSearchResult>>
 }
+
+export interface MetadataSearchResult {
+  /**
+   * Matching NFT IDs for this page.
+   */
+  nft_ids: Array<u64>;
+  /**
+   * Cursor to pass into the next call, or `none` when the scan is complete.
+   */
+  next_cursor: Option<u64>;
+  /**
+   * Number of NFT records actually scanned in this call.
+   */
+  scanned_count: u32;
+}
+
+export const Networks = {
+  "testnet": {
+    "networkPassphrase": "Test SDT Network ; February 2019",
+    "contractId": ""
+  },
+  "futurenet": {
+    "networkPassphrase": "Test SDF Futurenet ; September 2019",
+    "contractId": ""
+  },
+  "mainnet": {
+    "networkPassphrase": "Public Global Network ; September 2015",
+    "contractId": ""
+  }
+}
+
 export class Client extends ContractClient {
-  static async deploy<T = Client>(
-    /** Options for initializing a Client as well as for calling a method, with extras specific to deploying. */
-    options: MethodOptions &
-      Omit<ContractClientOptions, "contractId"> & {
-        /** The hash of the Wasm blob, which must already be installed on-chain. */
-        wasmHash: Buffer | string;
-        /** Salt used to generate the contract's ID. Passed through to {@link Operation.createCustomContract}. Default: random. */
-        salt?: Buffer | Uint8Array;
-        /** The format used to decode `wasmHash`, if it's provided as a string. */
-        format?: "hex" | "base64";
-      }
-  ): Promise<AssembledTransaction<T>> {
-    return ContractClient.deploy(null, options)
-  }
-  constructor(public readonly options: ContractClientOptions) {
-    super(
-      new ContractSpec([ "AAAAAAAAALVCdXJucyAocGVybWFuZW50bHkgZGVzdHJveXMpIGFuIE5GVCwgcmVtb3ZpbmcgaXQgZnJvbSBzdG9yYWdlIGFuZCB0aGUgb3duZXIncyBsaXN0LgoKIyBBdXRob3JpemF0aW9uClRoZSBgb3duZXJgIG11c3QgYXV0aG9yaXplIHRoaXMgY2FsbC4gVGhlIGNhbGxlciBtdXN0IGFsc28gYmUgdGhlIGN1cnJlbnQgb3duZXIuAAAAAAAABGJ1cm4AAAACAAAAAAAAAAZuZnRfaWQAAAAAAAYAAAAAAAAABW93bmVyAAAAAAAAEwAAAAEAAAPpAAAD7QAAAAAAAAfQAAAADE5mdEVycm9yQ29kZQ==",
-        "AAAAAAAAABlSZXRyaWV2ZXMgTkZUIGRhdGEgYnkgSUQuAAAAAAAAB2dldF9uZnQAAAAAAQAAAAAAAAAGbmZ0X2lkAAAAAAAGAAAAAQAAA+gAAAfQAAAAB05mdERhdGEA",
-        "AAAAAAAAABxSZXR1cm5zIHRoZSBvd25lciBvZiBhbiBORlQuAAAACG93bmVyX29mAAAAAQAAAAAAAAAGbmZ0X2lkAAAAAAAGAAAAAQAAA+gAAAAT",
-        "AAAAAAAAAC1SZXR1cm5zIHRoZSBjb25maWd1cmVkIGFkbWluIGFkZHJlc3MsIGlmIHNldC4AAAAAAAAJZ2V0X2FkbWluAAAAAAAAAAAAAAEAAAPoAAAAEw==",
-        "AAAAAQAAACNORlQgZGF0YSBzdHJ1Y3R1cmUgc3RvcmVkIG9uLWNoYWluLgAAAAAAAAAAB05mdERhdGEAAAAABwAAAAAAAAARY29tcGxldGlvbl9wbGF5ZXIAAAAAAAATAAAAAAAAAAdodW50X2lkAAAAAAYAAAAAAAAACG1ldGFkYXRhAAAH0AAAAAtOZnRNZXRhZGF0YQAAAAAAAAAACW1pbnRlZF9hdAAAAAAAAAYAAAAAAAAABm5mdF9pZAAAAAAABgAAAAAAAAAFb3duZXIAAAAAAAATAAAAAAAAAAx0cmFuc2ZlcmFibGUAAAAB",
-        "AAAAAAAAAJNJbml0aWFsaXplcyB0aGUgTkZUIHJld2FyZCBjb250cmFjdCB3aXRoIGFuIGFkbWluIGFkZHJlc3MgYW5kIG9wdGlvbmFsIG1heCBzdXBwbHkgY2FwLgpDYWxsIHRoaXMgb25jZSB0byBzZXQgdGhlIGFkbWluIHdobyBjYW4gbWFuYWdlIHRoZSBjb250cmFjdC4AAAAACmluaXRpYWxpemUAAAAAAAIAAAAAAAAABWFkbWluAAAAAAAAEwAAAAAAAAAKbWF4X3N1cHBseQAAAAAD6AAAAAYAAAABAAAD6QAAA+0AAAAAAAAH0AAAAAxOZnRFcnJvckNvZGU=",
-        "AAAAAAAAAEVSZXR1cm5zIHRydWUgaWYgYG9wZXJhdG9yYCBpcyBhcHByb3ZlZCB0byBtYW5hZ2UgYWxsIE5GVHMgb2YgYG93bmVyYC4AAAAAAAALaXNfb3BlcmF0b3IAAAAAAgAAAAAAAAAFb3duZXIAAAAAAAATAAAAAAAAAAhvcGVyYXRvcgAAABMAAAABAAAAAQ==",
-        "AAAAAAAAAIFSZXR1cm5zIGB0cnVlYCBpZiBgYWRkcmVzc2Agb3ducyBhbnkgTkZUIG1pbnRlZCBmb3IgYGh1bnRfaWRgLgpTY2FucyB0aGUgb3duZXIncyBpbmRleGVkIE5GVCBJRHMgYW5kIGNoZWNrcyBlYWNoIE5GVCdzIGBodW50X2lkYC4AAAAAAAAMaGFzX2h1bnRfbmZ0AAAAAgAAAAAAAAAHYWRkcmVzcwAAAAATAAAAAAAAAAdodW50X2lkAAAAAAYAAAABAAAAAQ==",
-        "AAAAAAAAAHVHcmFudHMgYG9wZXJhdG9yYCB0aGUgYWJpbGl0eSB0byBtYW5hZ2UgYWxsIE5GVHMgb3duZWQgYnkgYG93bmVyYC4KCiMgQXV0aG9yaXphdGlvbgpgb3duZXJgIG11c3QgYXV0aG9yaXplIHRoaXMgY2FsbC4AAAAAAAAMc2V0X29wZXJhdG9yAAAAAgAAAAAAAAAFb3duZXIAAAAAAAATAAAAAAAAAAhvcGVyYXRvcgAAABMAAAAA",
-        "AAAAAAAAAC9SZXR1cm5zIHRoZSB0b3RhbCBudW1iZXIgb2YgTkZUcyBtaW50ZWQgc28gZmFyLgAAAAAMdG90YWxfc3VwcGx5AAAAAAAAAAEAAAAG",
-        "AAAAAAAAAYxUcmFuc2ZlcnMgYW4gTkZUIGZyb20gb25lIGFkZHJlc3MgdG8gYW5vdGhlci4KCiMgQXJndW1lbnRzCiogYG5mdF9pZGAgLSBUaGUgTkZUIHRvIHRyYW5zZmVyCiogYGZyb21fYWRkcmVzc2AgLSBDdXJyZW50IG93bmVyIG9mIHRoZSBORlQKKiBgdG9fYWRkcmVzc2AgLSBOZXcgb3duZXIKKiBgY2FsbGVyYCAtIEFkZHJlc3MgYXV0aG9yaXppbmcgdGhlIHRyYW5zZmVyIChtdXN0IGJlIG93bmVyIG9yIGFwcHJvdmVkIG9wZXJhdG9yKQoKIyBBdXRob3JpemF0aW9uCmBjYWxsZXJgIG11c3QgYXV0aG9yaXplIHRoaXMgY2FsbC4gYGNhbGxlcmAgbXVzdCBiZSBlaXRoZXIgdGhlIGN1cnJlbnQgb3duZXIKb3IgYW4gb3BlcmF0b3IgYXBwcm92ZWQgYnkgdGhlIG93bmVyIHZpYSBgc2V0X29wZXJhdG9yYC4AAAAMdHJhbnNmZXJfbmZ0AAAABAAAAAAAAAAGbmZ0X2lkAAAAAAAGAAAAAAAAAAxmcm9tX2FkZHJlc3MAAAATAAAAAAAAAAp0b19hZGRyZXNzAAAAAAATAAAAAAAAAAZjYWxsZXIAAAAAABMAAAABAAAD6QAAA+0AAAAAAAAH0AAAAAxOZnRFcnJvckNvZGU=",
-        "AAAAAAAAADBBbGlhcyBmb3Igb3duZXJfb2YuIFJldHVybnMgdGhlIG93bmVyIG9mIGFuIE5GVC4AAAANZ2V0X25mdF9vd25lcgAAAAAAAAEAAAAAAAAABm5mdF9pZAAAAAAABgAAAAEAAAPoAAAAEw==",
-        "AAAAAAAAAAAAAAANcnVuX21pZ3JhdGlvbgAAAAAAAAMAAAAAAAAABWFkbWluAAAAAAAAEwAAAAAAAAAOdGFyZ2V0X3ZlcnNpb24AAAAAAAQAAAAAAAAAB2RyeV9ydW4AAAAAAQAAAAEAAAfQAAAAD01pZ3JhdGlvblJlcG9ydAA=",
-        "AAAAAQAAAH5Db3JlIGRpc3BsYXkgbWV0YWRhdGEgZm9yIGFuIE5GVCAodGl0bGUsIGRlc2NyaXB0aW9uLCBpbWFnZSBVUkkpLgpTdXBwb3J0cyBvZmYtY2hhaW4gc3RvcmFnZSByZWZlcmVuY2VzIHRvIGtlZXAgZ2FzIGNvc3RzIGxvdy4AAAAAAAAAAAALTmZ0TWV0YWRhdGEAAAAACAAAAJtPcmlnaW5hbCBjcmVhdG9yIG9mIHRoZSBORlQgKHN0YW1wZWQgYXQgbWludCB0aW1lIGZvciBwcm92ZW5hbmNlL2F0dHJpYnV0aW9uKS4KRXNzZW50aWFsIGZvciBzZWNvbmRhcnkgbWFya2V0IHJveWFsdHkgZGlzdHJpYnV0aW9uIGFuZCBjcmVhdG9yIGF0dHJpYnV0aW9uLgAAAAAHY3JlYXRvcgAAAAPoAAAAEwAAAAAAAAALZGVzY3JpcHRpb24AAAAAEAAAADFIdW50IHRpdGxlIGF0IHRpbWUgb2YgbWludCAoZm9yIGNvbnRleHQvZGlzcGxheSkuAAAAAAAACmh1bnRfdGl0bGUAAAAAABAAAAAAAAAACWltYWdlX3VyaQAAAAAAABAAAABWUmFyaXR5IHRpZXI6IDAgPSBkZWZhdWx0LCAxID0gY29tbW9uLCAyID0gdW5jb21tb24sIDMgPSByYXJlLCA0ID0gZXBpYywgNSA9IGxlZ2VuZGFyeS4AAAAAAAZyYXJpdHkAAAAAAAQAAACMUm95YWx0eSBpbiBiYXNpcyBwb2ludHMgKDEgYnAgPSAwLjAxJSkuIEZvciBleGFtcGxlLCAyNTAgPSAyLjUlIHJveWFsdHkuClVzZWQgZm9yIHNlY29uZGFyeSBtYXJrZXQgc2FsZXMgdG8gcHJvdmlkZSBvbmdvaW5nIGNyZWF0b3IgcmV2ZW51ZS4AAAALcm95YWx0eV9icHMAAAAD6AAAAAQAAAAuQ3VzdG9tIHRpZXIgZm9yIHNwZWNpYWwgY2F0ZWdvcmllcyAoMCA9IG5vbmUpLgAAAAAABHRpZXIAAAAEAAAAAAAAAAV0aXRsZQAAAAAAABA=",
-        "AAAAAAAAABZTZWFyY2hlcyBORlRzIGJ5IHRpZXIuAAAAAAAOc2VhcmNoX2J5X3RpZXIAAAAAAAEAAAAAAAAABHRpZXIAAAAEAAAAAQAAA+oAAAAG",
-        "AAAAAAAAAC5SZXR1cm5zIHBhZ2luYXRlZCBORlQgSURzIG93bmVkIGJ5IGFuIGFkZHJlc3MuAAAAAAAPZ2V0X3BsYXllcl9uZnRzAAAAAAMAAAAAAAAABW93bmVyAAAAAAAAEwAAAAAAAAAGb2Zmc2V0AAAAAAAEAAAAAAAAAAVsaW1pdAAAAAAAAAQAAAABAAAD6gAAAAY=",
-        "AAAAAAAAAlpNaW50cyBhIHVuaXF1ZSBORlQgYXMgYSByZXdhcmQgZm9yIGh1bnQgY29tcGxldGlvbi4KCmBtaW50ZXJgIG11c3QgYmUgYW4gYXV0aG9yaXplZCBtaW50ZXIgKGFuZCBtdXN0IHNpZ24gdGhlIHRyYW5zYWN0aW9uKSB3aGVuIHRoZQpjb250cmFjdCBoYXMgYmVlbiBpbml0aWFsaXplZC4gIEJlZm9yZSBpbml0aWFsaXphdGlvbiB0aGUgY2hlY2sgaXMgc2tpcHBlZCBzbwp0aGF0IGV4aXN0aW5nIGRlcGxveW1lbnRzIHJlbWFpbiBmdW5jdGlvbmFsLgoKIyBBcmd1bWVudHMKKiBgbWludGVyYCAtIEFkZHJlc3MgcGVyZm9ybWluZyB0aGUgbWludCAobXVzdCBiZSB3aGl0ZWxpc3RlZCBhZnRlciBpbml0KQoqIGBodW50X2lkYCAtIFRoZSBodW50IHRoaXMgTkZUIGNvbW1lbW9yYXRlcwoqIGBwbGF5ZXJfYWRkcmVzc2AgLSBUaGUgYWRkcmVzcyBvZiB0aGUgcGxheWVyIGNvbXBsZXRpbmcgdGhlIGh1bnQgKGluaXRpYWwgb3duZXIpCiogYG1ldGFkYXRhYCAtIE5GVCBtZXRhZGF0YSAodGl0bGUsIGRlc2NyaXB0aW9uLCBpbWFnZSBVUkksIGh1bnRfdGl0bGUsIHJhcml0eSwgdGllcikKCiMgUmV0dXJucwpUaGUgdW5pcXVlIE5GVCBJRCBvZiB0aGUgbWludGVkIE5GVAAAAAAAD21pbnRfcmV3YXJkX25mdAAAAAAEAAAAAAAAAAdfbWludGVyAAAAABMAAAAAAAAAB2h1bnRfaWQAAAAABgAAAAAAAAAOcGxheWVyX2FkZHJlc3MAAAAAABMAAAAAAAAACG1ldGFkYXRhAAAH0AAAAAtOZnRNZXRhZGF0YQAAAAABAAAABg==",
-        "AAAAAAAAAHBSZXZva2VzIG9wZXJhdG9yIGFwcHJvdmFsIGZvciBgb3BlcmF0b3JgIG92ZXIgYG93bmVyYCdzIE5GVHMuCgojIEF1dGhvcml6YXRpb24KYG93bmVyYCBtdXN0IGF1dGhvcml6ZSB0aGlzIGNhbGwuAAAAD3JlbW92ZV9vcGVyYXRvcgAAAAACAAAAAAAAAAVvd25lcgAAAAAAABMAAAAAAAAACG9wZXJhdG9yAAAAEwAAAAA=",
-        "AAAAAAAAAFBSZXR1cm5zIHRoZSBvbi1jaGFpbiB2ZXJzaW9uIHN0b3JlZCBkdXJpbmcgaW5pdGlhbGl6ZSwgb3IgdGhlIGNvbXBpbGVkIGNvbnN0YW50LgAAABBjb250cmFjdF92ZXJzaW9uAAAAAAAAAAEAAAAE",
-        "AAAAAAAAAFFSZXR1cm5zIGNvbXBsZXRlIG1ldGFkYXRhIGZvciBhbiBORlQsIGluY2x1ZGluZyBodW50IGluZm8gYW5kIGNvbXBsZXRpb24gZGV0YWlscy4AAAAAAAAQZ2V0X25mdF9tZXRhZGF0YQAAAAEAAAAAAAAABm5mdF9pZAAAAAAABgAAAAEAAAPoAAAH0AAAABNOZnRNZXRhZGF0YVJlc3BvbnNlAA==",
-        "AAAAAAAAAB1TZWFyY2hlcyBORlRzIGJ5IHJhcml0eSB0aWVyLgAAAAAAABBzZWFyY2hfYnlfcmFyaXR5AAAAAQAAAAAAAAAGcmFyaXR5AAAAAAAEAAAAAQAAA+oAAAAG",
-        "AAAAAAAAAIZWZXJpZmllcyB3aGV0aGVyIGBhZGRyZXNzYCBpcyB0aGUgY3VycmVudCBvd25lciBvZiBgbmZ0X2lkYC4KUmV0dXJucyBgdHJ1ZWAgd2hlbiB0aGUgTkZUIGV4aXN0cyBhbmQgdGhlIHN0b3JlZCBvd25lciBlcXVhbHMgYGFkZHJlc3NgLgAAAAAAEHZlcmlmeV9vd25lcnNoaXAAAAACAAAAAAAAAAdhZGRyZXNzAAAAABMAAAAAAAAABm5mdF9pZAAAAAAABgAAAAEAAAAB",
-        "AAAAAQAAACRFdmVudCBlbWl0dGVkIHdoZW4gYW4gTkZUIGlzIG1pbnRlZC4AAAAAAAAADk5mdE1pbnRlZEV2ZW50AAAAAAAHAAAAAAAAAAdodW50X2lkAAAAAAYAAAAAAAAACG1ldGFkYXRhAAAH0AAAAAtOZnRNZXRhZGF0YQAAAAAAAAAACW1pbnRlZF9hdAAAAAAAAAYAAAAAAAAABm5mdF9pZAAAAAAABgAAAAAAAAAFb3duZXIAAAAAAAATAAAAAAAAAAZyYXJpdHkAAAAAAAQAAAAAAAAABHRpZXIAAAAE",
-        "AAAAAAAAAAAAAAARaW5pdGlhbGl6ZV9zY2hlbWEAAAAAAAABAAAAAAAAAAVhZG1pbgAAAAAAABMAAAAA",
-        "AAAAAAAAABlTZWFyY2hlcyBORlRzIGJ5IGh1bnRfaWQuAAAAAAAAEXNlYXJjaF9ieV9odW50X2lkAAAAAAAAAQAAAAAAAAAHaHVudF9pZAAAAAAGAAAAAQAAA+oAAAAG",
-        "AAAAAAAAAAAAAAASZ2V0X3NjaGVtYV92ZXJzaW9uAAAAAAAAAAAAAQAAAAQ=",
-        "AAAAAAAAAAAAAAAScm9sbGJhY2tfbWlncmF0aW9uAAAAAAABAAAAAAAAAAVhZG1pbgAAAAAAABMAAAABAAAD6AAAB9AAAAAPTWlncmF0aW9uUmVwb3J0AA==",
-        "AAAAAAAAAEZTZXRzIHRoZSBSZXdhcmRNYW5hZ2VyIGNvbnRyYWN0IGFkZHJlc3MuIE9ubHkgdGhlIGFkbWluIGNhbiBjYWxsIHRoaXMuAAAAAAASc2V0X3Jld2FyZF9tYW5hZ2VyAAAAAAACAAAAAAAAAAVhZG1pbgAAAAAAABMAAAAAAAAADnJld2FyZF9tYW5hZ2VyAAAAAAATAAAAAQAAA+kAAAPtAAAAAAAAB9AAAAAMTmZ0RXJyb3JDb2Rl",
-        "AAAAAAAAAItVcGRhdGVzIG11dGFibGUgbWV0YWRhdGEgZmllbGRzIChkZXNjcmlwdGlvbiwgaW1hZ2VfdXJpKS4gT3duZXIgb25seS4KVGl0bGUsIGh1bnQgaW5mbywgYW5kIGF0dHJpYnV0ZXMgcmVtYWluIGltbXV0YWJsZSBmb3IgY29sbGVjdGliaWxpdHkuAAAAABN1cGRhdGVfbmZ0X21ldGFkYXRhAAAAAAQAAAAAAAAABm5mdF9pZAAAAAAABgAAAAAAAAAHdXBkYXRlcgAAAAATAAAAAAAAAA9uZXdfZGVzY3JpcHRpb24AAAAAEAAAAAAAAAANbmV3X2ltYWdlX3VyaQAAAAAAABAAAAABAAAD6QAAA+0AAAAAAAAH0AAAAAxOZnRFcnJvckNvZGU=",
-        "AAAAAQAAAFFDb21wbGV0ZSBtZXRhZGF0YSByZXR1cm5lZCBieSBnZXRfbmZ0X21ldGFkYXRhIChpbmNsdWRlcyBOZnREYXRhLWRlcml2ZWQgZmllbGRzKS4AAAAAAAAAAAAAE05mdE1ldGFkYXRhUmVzcG9uc2UAAAAADQAAAAAAAAARY29tcGxldGlvbl9wbGF5ZXIAAAAAAAATAAAAAAAAABRjb21wbGV0aW9uX3RpbWVzdGFtcAAAAAYAAAAAAAAAB2NyZWF0b3IAAAAD6AAAABMAAAAAAAAADWN1cnJlbnRfb3duZXIAAAAAAAATAAAAAAAAAAtkZXNjcmlwdGlvbgAAAAAQAAAAAAAAAAdodW50X2lkAAAAAAYAAAAAAAAACmh1bnRfdGl0bGUAAAAAABAAAAAAAAAACWltYWdlX3VyaQAAAAAAABAAAAAAAAAABm5mdF9pZAAAAAAABgAAAAAAAAAGcmFyaXR5AAAAAAAEAAAAAAAAAAtyb3lhbHR5X2JwcwAAAAPoAAAABAAAAAAAAAAEdGllcgAAAAQAAAAAAAAABXRpdGxlAAAAAAAAEA==",
-        "AAAAAQAAAClFdmVudCBlbWl0dGVkIHdoZW4gYW4gTkZUIGlzIHRyYW5zZmVycmVkLgAAAAAAAAAAAAATTmZ0VHJhbnNmZXJyZWRFdmVudAAAAAADAAAAAAAAAARmcm9tAAAAEwAAAAAAAAAGbmZ0X2lkAAAAAAAGAAAAAAAAAAJ0bwAAAAAAEw==",
-        "AAAAAAAAACpTZWFyY2hlcyBORlRzIGJ5IHJhcml0eSByYW5nZSAoaW5jbHVzaXZlKS4AAAAAABZzZWFyY2hfYnlfcmFyaXR5X3JhbmdlAAAAAAACAAAAAAAAAAptaW5fcmFyaXR5AAAAAAAEAAAAAAAAAAptYXhfcmFyaXR5AAAAAAAEAAAAAQAAA+oAAAAG",
-        "AAAAAQAAADZFdmVudCBlbWl0dGVkIHdoZW4gYW4gb3duZXIgY2hhbmdlcyBvcGVyYXRvciBhcHByb3ZhbC4AAAAAAAAAAAAUT3BlcmF0b3JDaGFuZ2VkRXZlbnQAAAADAAAAAAAAAAhhcHByb3ZlZAAAAAEAAAAAAAAACG9wZXJhdG9yAAAAEwAAAAAAAAAFb3duZXIAAAAAAAAT",
-        "AAAAAAAAAfNCYXRjaC11cGRhdGVzIGltYWdlIFVSSXMgZm9yIGFsbCBORlRzIHdob3NlIGBpbWFnZV91cmlgIHN0YXJ0cyB3aXRoIGBvbGRfcHJlZml4YCwKcmVwbGFjaW5nIGl0IHdpdGggYG5ld19wcmVmaXhgLiBVc2VmdWwgZm9yIG1pZ3JhdGluZyBiZXR3ZWVuIElQRlMgZ2F0ZXdheXMgb3IgQ0ROcy4KCiMgQXV0aG9yaXphdGlvbgpPbmx5IHRoZSBjb25maWd1cmVkIGFkbWluIGNhbiBjYWxsIHRoaXMgZnVuY3Rpb24uCgojIEFyZ3VtZW50cwoqIGBhZG1pbmAgLSBUaGUgYWRtaW4gYWRkcmVzcyAobXVzdCBtYXRjaCB0aGUgc3RvcmVkIGFkbWluKQoqIGBvbGRfcHJlZml4YCAtIFRoZSBwcmVmaXggdG8gbWF0Y2ggKGUuZy4gImlwZnM6Ly9vbGRnYXRld2F5LyIpCiogYG5ld19wcmVmaXhgIC0gVGhlIHJlcGxhY2VtZW50IHByZWZpeCAoZS5nLiAiaXBmczovL25ld2dhdGV3YXkvIikKCiMgUmV0dXJucwpUaGUgbnVtYmVyIG9mIE5GVHMgd2hvc2UgaW1hZ2UgVVJJcyB3ZXJlIHVwZGF0ZWQuAAAAABdhZG1pbl91cGRhdGVfaW1hZ2VfdXJpcwAAAAADAAAAAAAAAAVhZG1pbgAAAAAAABMAAAAAAAAACm9sZF9wcmVmaXgAAAAAABAAAAAAAAAACm5ld19wcmVmaXgAAAAAABAAAAABAAAD6QAAAAQAAAfQAAAADE5mdEVycm9yQ29kZQ==",
-        "AAAAAAAAAqBNaW50cyBhIHJld2FyZCBORlQgZnJvbSBhIGdlbmVyaWMgbWV0YWRhdGEgbWFwLiBUaGlzIGlzIHRoZSBlbnRyeXBvaW50CnVzZWQgYnkgY3Jvc3MtY29udHJhY3QgY2FsbGVycyAoZS5nLiBSZXdhcmRNYW5hZ2VyKSB0aGF0IGNhbm5vdCBkZXBlbmQKb24gdGhpcyBjcmF0ZSdzIGBOZnRNZXRhZGF0YWAgdHlwZSBkaXJlY3RseS4KCmBtaW50ZXJgIGlzIHRoZSBjYWxsaW5nIGNvbnRyYWN0J3MgYWRkcmVzcyBhbmQgbXVzdCBiZSB3aGl0ZWxpc3RlZCB3aGVuIHRoZQpjb250cmFjdCBoYXMgYmVlbiBpbml0aWFsaXplZC4KCkV4cGVjdGVkIGtleXMgaW4gYG1ldGFkYXRhYCAoYWxsIG9wdGlvbmFsLCB3aXRoIHNlbnNpYmxlIGRlZmF1bHRzKToKLSAidGl0bGUiOiBTdHJpbmcKLSAiZGVzY3JpcHRpb24iOiBTdHJpbmcKLSAiaW1hZ2VfdXJpIjogU3RyaW5nCi0gImh1bnRfdGl0bGUiOiBTdHJpbmcgKGRlZmF1bHRzIHRvIHRpdGxlIHdoZW4gb21pdHRlZC9lbXB0eSkKLSAicmFyaXR5IjogdTMyCi0gInRpZXIiOiB1MzIKLSAiY3JlYXRvciI6IEFkZHJlc3MgKGRlZmF1bHRzIHRvIHBsYXllcl9hZGRyZXNzIGlmIG9taXR0ZWQpCi0gInJveWFsdHlfYnBzIjogdTMyIChvcHRpb25hbCwgYmFzaXMgcG9pbnRzIGZvciByb3lhbHR5IHBlcmNlbnRhZ2UpCi0gInRyYW5zZmVyYWJsZSI6IGJvb2wAAAAYbWludF9yZXdhcmRfbmZ0X2Zyb21fbWFwAAAABAAAAAAAAAAHX21pbnRlcgAAAAATAAAAAAAAAAdodW50X2lkAAAAAAYAAAAAAAAADnBsYXllcl9hZGRyZXNzAAAAAAATAAAAAAAAAAhtZXRhZGF0YQAAA+wAAAARAAAAAAAAAAEAAAAG",
-        "AAAAAQAAADhFdmVudCBlbWl0dGVkIHdoZW4gYW4gTkZUJ3MgbXV0YWJsZSBtZXRhZGF0YSBpcyB1cGRhdGVkLgAAAAAAAAAXTmZ0TWV0YWRhdGFVcGRhdGVkRXZlbnQAAAAAAgAAAAAAAAAGbmZ0X2lkAAAAAAAGAAAAAAAAAAd1cGRhdGVyAAAAABM=",
-        "AAAAAQAAAD5FdmVudCBlbWl0dGVkIHdoZW4gYWRtaW4gYmF0Y2gtdXBkYXRlcyBpbWFnZSBVUklzIGFjcm9zcyBORlRzLgAAAAAAAAAAABpBZG1pbkltYWdlVXJpc1VwZGF0ZWRFdmVudAAAAAAAAwAAAAAAAAAKbmV3X3ByZWZpeAAAAAAAEAAAAAAAAAAKb2xkX3ByZWZpeAAAAAAAEAAAAAAAAAANdXBkYXRlZF9jb3VudAAAAAAAAAQ=",
-        "AAAABAAAAAAAAAAAAAAADE5mdEVycm9yQ29kZQAAAAoAAAAAAAAAC05mdE5vdEZvdW5kAAAAAAEAAAAAAAAADFVuYXV0aG9yaXplZAAAAAIAAAAAAAAACE5vdE93bmVyAAAAAwAAAAAAAAAQSW52YWxpZFJlY2lwaWVudAAAAAQAAAAAAAAADFNvdWxib3VuZE5mdAAAAAUAAAAAAAAADUludmFsaWRSYXJpdHkAAAAAAAAGAAAAAAAAABJBbHJlYWR5SW5pdGlhbGl6ZWQAAAAAAAcAAAAAAAAAEE1heFN1cHBseVJlYWNoZWQAAAAIAAAAAAAAAA5Ob3RJbml0aWFsaXplZAAAAAAACQAAAAAAAAALTm90T3BlcmF0b3IAAAAACg==",
-        "AAAAAQAAAAAAAAAAAAAAD01pZ3JhdGlvblJlcG9ydAAAAAAGAAAAAAAAAAdkcnlfcnVuAAAAAAEAAAAAAAAADGZyb21fdmVyc2lvbgAAAAQAAAAAAAAAB21lc3NhZ2UAAAAAEAAAAAAAAAANc3RlcHNfYXBwbGllZAAAAAAAAAQAAAAAAAAACXN1Y2NlZWRlZAAAAAAAAAEAAAAAAAAACnRvX3ZlcnNpb24AAAAAAAQ=" ]),
-      options
-    )
-  }
-  public readonly fromJSON = {
-    burn: this.txFromJSON<Result<void>>,
-        get_nft: this.txFromJSON<Option<NftData>>,
-        owner_of: this.txFromJSON<Option<string>>,
-        get_admin: this.txFromJSON<Option<string>>,
-        initialize: this.txFromJSON<Result<void>>,
-        is_operator: this.txFromJSON<boolean>,
-        has_hunt_nft: this.txFromJSON<boolean>,
-        set_operator: this.txFromJSON<null>,
-        total_supply: this.txFromJSON<u64>,
-        transfer_nft: this.txFromJSON<Result<void>>,
-        get_nft_owner: this.txFromJSON<Option<string>>,
-        run_migration: this.txFromJSON<MigrationReport>,
-        search_by_tier: this.txFromJSON<Array<u64>>,
-        get_player_nfts: this.txFromJSON<Array<u64>>,
-        mint_reward_nft: this.txFromJSON<u64>,
-        remove_operator: this.txFromJSON<null>,
-        contract_version: this.txFromJSON<u32>,
-        get_nft_metadata: this.txFromJSON<Option<NftMetadataResponse>>,
-        search_by_rarity: this.txFromJSON<Array<u64>>,
-        verify_ownership: this.txFromJSON<boolean>,
-        initialize_schema: this.txFromJSON<null>,
-        search_by_hunt_id: this.txFromJSON<Array<u64>>,
-        get_schema_version: this.txFromJSON<u32>,
-        rollback_migration: this.txFromJSON<Option<MigrationReport>>,
-        set_reward_manager: this.txFromJSON<Result<void>>,
-        update_nft_metadata: this.txFromJSON<Result<void>>,
-        search_by_rarity_range: this.txFromJSON<Array<u64>>,
-        admin_update_image_uris: this.txFromJSON<Result<u32>>,
-        mint_reward_nft_from_map: this.txFromJSON<u64>
+  constructor(options: ContractClientOptions = { contractId: '' }) {
+    super(new ContractSpec([{
+      "type": "function",
+      "name": "burn",
+      "inputs": [
+        {
+          "name": "nft_id",
+          "type": "u64"
+        },
+        {
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "result"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "get_nft",
+      "inputs": [
+        {
+          "name": "nft_id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "option"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "owner_of",
+      "inputs": [
+        {
+          "name": "nft_id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "option"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "get_admin",
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "option"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "initialize",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "address"
+        },
+        {
+          "name": "max_supply",
+          "type": "option"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "result"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "is_operator",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "has_hunt_nft",
+      "inputs": [
+        {
+          "name": "address",
+          "type": "address"
+        },
+        {
+          "name": "hunt_id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "set_operator",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "total_supply",
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "transfer_nft",
+      "inputs": [
+        {
+          "name": "nft_id",
+          "type": "u64"
+        },
+        {
+          "name": "from_address",
+          "type": "address"
+        },
+        {
+          "name": "to_address",
+          "type": "address"
+        },
+        {
+          "name": "caller",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "result"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "run_migration",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "address"
+        },
+        {
+          "name": "target_version",
+          "type": "u32"
+        },
+        {
+          "name": "dry_run",
+          "type": "boolean"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "defined",
+          "name": "MigrationReport"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "search_by_tier",
+      "inputs": [
+        {
+          "name": "tier",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "get_player_nfts",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "name": "offset",
+          "type": "u32"
+        },
+        {
+          "name": "limit",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "mint_reward_nft",
+      "inputs": [
+        {
+          "name": "_minter",
+          "type": "address"
+        },
+        {
+          "name": "hunt_id",
+          "type": "u64"
+        },
+        {
+          "name": "player_address",
+          "type": "address"
+        },
+        {
+          "name": "metadata",
+          "type": "defined",
+          "name": "NftMetadata"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "result"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "search_nfts_by_metadata",
+      "inputs": [
+        {
+          "name": "title_contains",
+          "type": "option"
+        },
+        {
+          "name": "creator",
+          "type": "option"
+        },
+        {
+          "name": "cursor",
+          "type": "option"
+        },
+        {
+          "name": "limit",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "defined",
+          "name": "MetadataSearchResult"
+        }
+      ]
+    },
+    {
+      "type": "defined",
+      "name": "MetadataSearchResult",
+      "fields": [
+        {
+          "name": "nft_ids",
+          "type": "array"
+        },
+        {
+          "name": "next_cursor",
+          "type": "option"
+        },
+        {
+          "name": "scanned_count",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "type": "defined",
+      "name": "MigrationReport",
+      "fields": [
+        {
+          "name": "dry_run",
+          "type": "boolean"
+        },
+        {
+          "name": "from_version",
+          "type": "u32"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        },
+        {
+          "name": "steps_applied",
+          "type": "u32"
+        },
+        {
+          "name": "succeeded",
+          "type": "boolean"
+        },
+        {
+          "name": "to_version",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "type": "defined",
+      "name": "NftMetadata",
+      "fields": [
+        {
+          "name": "creator",
+          "type": "option"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "hunt_title",
+          "type": "string"
+        },
+        {
+          "name": "image_uri",
+          "type": "string"
+        },
+        {
+          "name": "rarity",
+          "type": "u32"
+        },
+        {
+          "name": "royalty_bps",
+          "type": "option"
+        },
+        {
+          "name": "tier",
+          "type": "u32"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        }
+      ]
+    }
+  ]), options)
   }
 }
