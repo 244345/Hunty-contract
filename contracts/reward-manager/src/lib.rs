@@ -1579,7 +1579,6 @@ impl RewardManager {
 
         let _reentrancy_guard = ReentrancyGuard::acquire(&env)?;
 
-        let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
         let contract_addr = env.current_contract_address();
         let day = env.ledger().timestamp() / 86400;
 
@@ -1588,9 +1587,15 @@ impl RewardManager {
             let mut xlm_amount = 0i128;
             let mut nft_id: Option<u64> = None;
 
-            // 2a. XLM distribution
+            // 2a. Token distribution
             if entry.reward_config.has_xlm() {
                 let amount = entry.reward_config.xlm_amount.unwrap();
+
+                // Use the pool's configured token address, not the global XLM token.
+                // Each pool may be denominated in a different asset (XLM, USDC, etc.).
+                let pool_config = Storage::get_pool_config(&env, entry.hunt_id)
+                    .ok_or(RewardErrorCode::PoolNotFound)?;
+                let token_address = pool_config.token_address;
 
                 // Daily caps (accumulated across entries in this batch)
                 Storage::add_daily_pool_distributed(&env, entry.hunt_id, day, amount);
@@ -1631,14 +1636,14 @@ impl RewardManager {
                     }
                 }
 
-                // Pool balance divergence check
-                if !XlmHandler::validate_pool(&env, &xlm_token, &contract_addr, amount) {
+                // Pool balance divergence check against the pool's own token
+                if !TokenHandler::validate_pool(&env, &token_address, &contract_addr, amount) {
                     return Err(RewardErrorCode::PoolBalanceDivergence);
                 }
 
-                XlmHandler::distribute_xlm(
+                TokenHandler::distribute_tokens(
                     &env,
-                    &xlm_token,
+                    &token_address,
                     &contract_addr,
                     &entry.player_address,
                     amount,
@@ -2113,8 +2118,9 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
-        // Ensure the pool exists
-        Storage::get_pool_config(&env, hunt_id).ok_or(RewardErrorCode::PoolNotFound)?;
+        // Ensure the pool exists and retrieve its token address
+        let pool_config =
+            Storage::get_pool_config(&env, hunt_id).ok_or(RewardErrorCode::PoolNotFound)?;
 
         let balance = Storage::get_pool_balance(&env, hunt_id);
         let withdraw_amount = if amount == 0 { balance } else { amount };
@@ -2126,10 +2132,12 @@ impl RewardManager {
         monitoring::Monitoring::record_large_withdrawal(&env, withdraw_amount);
         monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
-        let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
+        // Use the pool's own token, not the global XLM token.
+        // Each pool may be denominated in a different asset (XLM, USDC, etc.).
+        let token_address = &pool_config.token_address;
 
         let contract_addr = env.current_contract_address();
-        let client = soroban_sdk::token::Client::new(&env, &xlm_token);
+        let client = soroban_sdk::token::Client::new(&env, token_address);
         client.transfer(&contract_addr, &recipient, &withdraw_amount);
 
         Storage::set_pool_balance(&env, hunt_id, balance - withdraw_amount);
@@ -2234,16 +2242,19 @@ impl RewardManager {
         if !Storage::is_paused(&env) {
             return Err(RewardErrorCode::ContractPaused);
         }
-        let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
         let contract_addr = env.current_contract_address();
-        let client = soroban_sdk::token::Client::new(&env, &xlm_token);
         let mut total_withdrawn: i128 = 0;
 
         if hunt_id > 0 {
-            // Single pool emergency withdrawal
+            // Single pool emergency withdrawal — use the pool's own token.
             let balance = Storage::get_pool_balance(&env, hunt_id);
             if balance > 0 {
-                client.transfer(&contract_addr, &recipient, &balance);
+                // Use the pool's configured token (XLM, USDC, etc.), not the global XLM token.
+                if let Some(pool_config) = Storage::get_pool_config(&env, hunt_id) {
+                    let client =
+                        soroban_sdk::token::Client::new(&env, &pool_config.token_address);
+                    client.transfer(&contract_addr, &recipient, &balance);
+                }
                 Storage::set_pool_balance(&env, hunt_id, 0);
                 total_withdrawn = balance;
                 let log_entry = EmergencyWithdrawalLogEntry {
@@ -2265,11 +2276,16 @@ impl RewardManager {
                 );
             }
         } else {
-            // Drain all pools up to max_hunt_id
+            // Drain all pools up to max_hunt_id — each pool uses its own token.
             for pid in 1..=max_hunt_id {
                 let balance = Storage::get_pool_balance(&env, pid);
                 if balance > 0 {
-                    client.transfer(&contract_addr, &recipient, &balance);
+                    // Use the pool's configured token (XLM, USDC, etc.), not the global XLM token.
+                    if let Some(pool_config) = Storage::get_pool_config(&env, pid) {
+                        let client =
+                            soroban_sdk::token::Client::new(&env, &pool_config.token_address);
+                        client.transfer(&contract_addr, &recipient, &balance);
+                    }
                     Storage::set_pool_balance(&env, pid, 0);
                     total_withdrawn += balance;
                     let log_entry = EmergencyWithdrawalLogEntry {
