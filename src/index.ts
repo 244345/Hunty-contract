@@ -85,6 +85,10 @@ export function createApp({ config, limiter }: AppDeps): express.Express {
   });
 
   app.get('/mint/count/:address', async (req, res) => {
+    if (!/^G[A-Z2-7]{55}$/.test(req.params.address)) {
+      res.status(400).json({ error: 'invalid address' });
+      return;
+    }
     const count = await limiter.getMintCount(req.params.address);
     res.json({ address: req.params.address, mintsInWindow: count });
   });

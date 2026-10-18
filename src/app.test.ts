@@ -118,4 +118,16 @@ describe('createApp', () => {
     });
     expect(limited.status).toBe(429);
   });
+
+  it('rejects invalid addresses on GET /mint/count/:address', async () => {
+    const app = createApp({ config, limiter });
+    const listening = await listen(app);
+    server = listening.server;
+
+    const res = await fetch(`${listening.baseUrl}/mint/count/not-an-address`);
+    expect(res.status).toBe(400);
+
+    const ok = await fetch(`${listening.baseUrl}/mint/count/${VALID_ADDRESS}`);
+    expect(ok.status).toBe(200);
+  });
 });
