@@ -124,6 +124,7 @@ EXPECTED_FUNCTIONS: Dict[str, Set[str]] = {
         "get_upgrade_proposal",
         "get_upgrade_timelock",
         "get_upgrade_history",
+        "get_migration_history",
     },
     "reward-manager": {
         "accept_admin",
@@ -166,6 +167,7 @@ EXPECTED_FUNCTIONS: Dict[str, Set[str]] = {
         "get_schema_version",
         "get_total_xlm_distributed",
         "get_upgrade_history",
+        "get_migration_history",
         "get_upgrade_proposal",
         "get_upgrade_timelock",
         "get_vesting_status",
@@ -208,9 +210,9 @@ EXPECTED_FUNCTIONS: Dict[str, Set[str]] = {
         "upgrade",
     },
     "nft-reward": {
-        "initialize",
         "get_schema_version",
         "get_upgrade_history",
+        "get_migration_history",
         "get_upgrade_proposal",
         "get_upgrade_timelock",
         "initialize_schema",

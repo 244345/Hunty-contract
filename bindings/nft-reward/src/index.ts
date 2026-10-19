@@ -419,25 +419,6 @@ export class Client extends ContractClient {
     },
     {
       "type": "function",
-      "name": "initialize",
-      "inputs": [
-        {
-          "name": "admin",
-          "type": "address"
-        },
-        {
-          "name": "max_supply",
-          "type": "option"
-        }
-      ],
-      "outputs": [
-        {
-          "type": "result"
-        }
-      ]
-    },
-    {
-      "type": "function",
       "name": "is_operator",
       "inputs": [
         {

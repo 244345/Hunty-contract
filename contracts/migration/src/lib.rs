@@ -28,6 +28,7 @@ const TIMELOCK_KEY: Symbol = symbol_short!("UPTLK");
 const TIMELOCK_PENDING_KEY: Symbol = symbol_short!("UPTLDP");
 const HIST_COUNT_KEY: Symbol = symbol_short!("UPHCT");
 const UPGRADE_ADMIN_KEY: Symbol = symbol_short!("UPADM");
+const MIGR_HIST_COUNT_KEY: Symbol = symbol_short!("MIGHCT");
 
 /// TTL threshold (ledgers) for upgrade history entries before they are
 /// considered stale and may be archived by the Soroban TTL garbage
@@ -78,6 +79,17 @@ pub struct UpgradeHistoryEntry {
     pub from_version: u32,
     pub to_version: u32,
     pub wasm_hash: BytesN<32>,
+    pub executed_at: u64,
+    pub executor: Address,
+}
+
+/// History entry for a schema migration (run_migration), which is not a WASM
+/// upgrade and therefore has no wasm_hash.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MigrationHistoryEntry {
+    pub from_version: u32,
+    pub to_version: u32,
     pub executed_at: u64,
     pub executor: Address,
 }
@@ -443,6 +455,49 @@ impl UpgradeAuthorization {
         count
     }
 
+    /// Records a completed schema migration into the migration history
+    /// (separate from the WASM-upgrade history).
+    pub fn record_migration(env: &Env, entry: &MigrationHistoryEntry) {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0);
+        let key = (symbol_short!("MIGHIS"), count);
+        env.storage().persistent().set(&key, entry);
+        env.storage()
+            .persistent()
+            .set(&MIGR_HIST_COUNT_KEY, &(count + 1));
+    }
+
+    /// Returns a page of migration-history entries (no wasm_hash field).
+    pub fn get_migration_history(env: &Env, offset: u32, limit: u32) -> Vec<MigrationHistoryEntry> {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0);
+        if offset >= count {
+            return Vec::new(env);
+        }
+        let end = offset.saturating_add(limit).min(count);
+        let mut entries = Vec::new(env);
+        for i in offset..end {
+            let key = (symbol_short!("MIGHIS"), i);
+            if let Some(entry) = env.storage().persistent().get(&key) {
+                entries.push_back(entry);
+            }
+        }
+        entries
+    }
+
+    pub fn migration_history_count(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&MIGR_HIST_COUNT_KEY)
+            .unwrap_or(0)
+    }
+
     pub fn prepare_migration_run(
         env: &Env,
         admin: &Address,
@@ -486,8 +541,16 @@ impl UpgradeAuthorization {
         to_version: u32,
         now: u64,
     ) {
-        let default_hash = BytesN::from_array(env, &[0u8; 32]);
-        Self::finalize_upgrade_run(env, executor, from_version, to_version, &default_hash, now);
+        Self::clear_proposal(env);
+        Self::record_migration(
+            env,
+            &MigrationHistoryEntry {
+                from_version,
+                to_version,
+                executed_at: now,
+                executor: executor.clone(),
+            },
+        );
     }
 }
 

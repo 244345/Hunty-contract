@@ -4133,6 +4133,17 @@ impl RewardManager {
         migration::RewardManagerMigration::get_upgrade_history(&env, offset, capped_limit)
     }
 
+    /// Returns a page of schema-migration history entries (no wasm_hash —
+    /// migrations are not WASM upgrades).
+    pub fn get_migration_history(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<hunty_migration::MigrationHistoryEntry> {
+        let capped_limit = limit.min(50);
+        migration::RewardManagerMigration::get_migration_history(&env, offset, capped_limit)
+    }
+
     pub fn run_migration(
         env: Env,
         admin: Address,
@@ -4148,8 +4159,8 @@ impl RewardManager {
         )?;
         if !dry_run && report.succeeded && report.from_version < report.to_version {
             env.events().publish(
-                migration::RewardManagerMigration::upgrade_executed_topic(&env),
-                migration::RewardManagerMigration::upgrade_executed_event(
+                migration::RewardManagerMigration::migration_executed_topic(&env),
+                migration::RewardManagerMigration::migration_executed_event(
                     from_version,
                     report.to_version,
                     &BytesN::from_array(&env, &[0u8; 32]),

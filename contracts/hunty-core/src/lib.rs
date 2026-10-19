@@ -4361,7 +4361,12 @@ impl HuntyCore {
         target_version: u32,
         wasm_hash: BytesN<32>,
     ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
-        let proposal = migration::HuntyCoreMigration::propose_upgrade(&env, &admin, target_version, wasm_hash)?;
+        let proposal = migration::HuntyCoreMigration::propose_upgrade(
+            &env,
+            &admin,
+            target_version,
+            wasm_hash,
+        )?;
         env.events().publish(
             migration::HuntyCoreMigration::upgrade_proposed_topic(&env),
             migration::HuntyCoreMigration::upgrade_proposed_event(&proposal),
@@ -4401,6 +4406,16 @@ impl HuntyCore {
         migration::HuntyCoreMigration::get_upgrade_history(&env, offset, limit)
     }
 
+    /// Returns a page of schema-migration history entries (no wasm_hash —
+    /// migrations are not WASM upgrades).
+    pub fn get_migration_history(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<hunty_migration::MigrationHistoryEntry> {
+        migration::HuntyCoreMigration::get_migration_history(&env, offset, limit)
+    }
+
     pub fn upgrade(
         env: Env,
         admin: Address,
@@ -4416,7 +4431,21 @@ impl HuntyCore {
         dry_run: bool,
     ) -> Result<migration::MigrationReport, hunty_migration::UpgradeAuthError> {
         admin.require_auth();
-        migration::HuntyCoreMigration::run_migration(&env, &admin, target_version, dry_run)
+        let from_version = migration::HuntyCoreMigration::get_schema_version(&env);
+        let report =
+            migration::HuntyCoreMigration::run_migration(&env, &admin, target_version, dry_run)?;
+        if !dry_run && report.succeeded && report.from_version < report.to_version {
+            env.events().publish(
+                migration::HuntyCoreMigration::migration_executed_topic(&env),
+                migration::HuntyCoreMigration::migration_executed_event(
+                    from_version,
+                    report.to_version,
+                    env.ledger().timestamp(),
+                    admin,
+                ),
+            );
+        }
+        Ok(report)
     }
 
     pub fn rollback_migration(
