@@ -1,15 +1,41 @@
 use soroban_sdk::{contracttype, Address, BytesN, Env, Map, String, Vec};
 
+/// Maximum number of co-creators allowed per hunt.
+/// Bounds the size of the co-creator list so it cannot grow without limit.
+pub const MAX_CO_CREATORS: u32 = 10;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
 pub enum HuntStatus {
-    Draft,
-    Active,
-    Completed,
-    Cancelled,
-    Paused,
-    EmergencyStopped,
-    Archived,
+    /// A hunt that has never been activated.
+    Draft = 0,
+    /// A hunt currently accepting registrations and answers.
+    Active = 1,
+    /// A normally completed hunt.
+    Completed = 2,
+    /// A hunt cancelled by its creator.
+    Cancelled = 3,
+    /// A temporarily paused hunt. This explicit value preserves the wire
+    /// layout already emitted by the Paused-state implementation on main.
+    Paused = 4,
+    /// A terminal emergency state retained for compatibility with older
+    /// deployments.
+    EmergencyStopped = 5,
+    /// A terminal hunt whose storage may be garbage-collected.
+    Archived = 6,
+}
+
+/// Controls who can view the leaderboard for a hunt.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderboardVisibility {
+    /// Anyone can view the leaderboard (default).
+    Public,
+    /// Only players who have registered for the hunt can view the leaderboard.
+    RegisteredOnly,
+    /// Only the hunt creator can view the leaderboard.
+    CreatorOnly,
 }
 
 #[contracttype]
@@ -22,6 +48,7 @@ pub struct RewardConfig {
     pub claimed_count: u32,
     pub nft_rarity: u32,
     pub nft_tier: u32,
+    pub nft_image_uri: Option<String>,
 }
 
 pub type HuntRewardConfig = RewardConfig;
@@ -65,10 +92,12 @@ pub struct Hunt {
     pub max_players: u32,
     /// When true, only players with a valid invite code may register.
     pub is_private: bool,
-    /// SHA256 hash (salted with hunt_id) of the invite code, if configured.
-    pub invite_code_hash: Option<BytesN<32>>,
     /// Dynamically recalculated on every `get_hunt` read; not meaningful when read from a raw struct literal.
     pub remaining_slots: u32,
+    /// Controls who can view the hunt's leaderboard. Defaults to Public.
+    pub leaderboard_visibility: LeaderboardVisibility,
+    /// SHA256 hash of the invite code (salted with hunt_id). None if no invite code is set.
+    pub invite_code_hash: Option<BytesN<32>>,
 }
 
 #[contracttype]
@@ -82,6 +111,7 @@ pub struct HuntCache {
     pub total_clues: u32,
     pub required_clues: u32,
     pub max_winners: u32,
+    pub activated_at: u64,
 }
 
 impl HuntCache {
@@ -95,6 +125,7 @@ impl HuntCache {
             total_clues: hunt.total_clues,
             required_clues: hunt.required_clues,
             max_winners: hunt.reward_config.max_winners,
+            activated_at: hunt.activated_at,
         }
     }
 }
@@ -114,6 +145,12 @@ pub struct Clue {
     pub hint_penalty_points: u32,
 }
 
+/// Sentinel value used by `ClueInfo` when the caller is not yet allowed to
+/// see the clue question (unregistered caller, or hunt not yet started).
+/// The question field is replaced with this marker so that clients can
+/// distinguish a redacted clue from a genuinely empty question.
+pub const REDACTED_QUESTION: &str = "[locked]";
+
 /// Input payload for adding multiple clues in one contract invocation.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,7 +159,8 @@ pub struct BatchClueInput {
     pub answer: String,
     pub points: u32,
     pub is_required: bool,
-    /// Difficulty multiplier (1-10). Points earned = points * difficulty.
+    /// Difficulty tier (1-5, 1 = easiest, 5 = hardest).
+    /// Difficulty multiplies the clue's points: points earned = points * difficulty.
     pub difficulty: u32,
 }
 
@@ -140,6 +178,14 @@ pub struct ClueInfo {
     pub hint_penalty_points: u32,
 }
 
+impl ClueInfo {
+    /// Returns true when the question has been redacted because the caller
+    /// is not yet entitled to view it (see `get_clue`/`list_clues`).
+    pub fn is_question_redacted(&self) -> bool {
+        self.question == String::from_str(&Env::default(), REDACTED_QUESTION)
+    }
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct HuntCancelledEvent {
@@ -149,12 +195,14 @@ pub struct HuntCancelledEvent {
 /// Emitted when a creator force-closes a hunt early (marks it Completed) while
 /// preserving player scores and any already-distributed rewards. `rewarded_players`
 /// is the number of completed players who received a final reward as part of closing.
+/// `unpaid_players` lists eligible players whose final reward distribution failed.
 #[contracttype]
 #[derive(Clone)]
 pub struct HuntClosedEvent {
     pub hunt_id: u64,
     pub closed_at: u64,
     pub rewarded_players: u32,
+    pub unpaid_players: Vec<Address>,
 }
 
 #[contracttype]
@@ -183,6 +231,39 @@ pub struct HuntArchivedEvent {
     pub hunt_id: u64,
 }
 
+/// Result of a `gc_hunt` sweep (issue #446).
+///
+/// Counts are split by storage tier because the two are charged and expire
+/// differently on Soroban: instance entries share the contract's own TTL, while
+/// persistent entries each carry their own. An operator reclaiming space needs
+/// to see which tier actually shrank.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct GcReport {
+    pub hunt_id: u64,
+    /// Entries removed from persistent storage.
+    pub persistent_removed: u32,
+    /// Entries removed from instance storage.
+    pub instance_removed: u32,
+    /// `persistent_removed + instance_removed`.
+    pub total_removed: u32,
+    /// Players whose per-hunt entries were swept.
+    pub players_swept: u32,
+    /// Clues whose per-hunt entries were swept.
+    pub clues_swept: u32,
+    /// Teams whose per-hunt entries were swept.
+    pub teams_swept: u32,
+}
+
+/// Emitted once a cancelled or archived hunt's storage has been reclaimed.
+#[contracttype]
+#[derive(Clone)]
+pub struct HuntGarbageCollectedEvent {
+    pub hunt_id: u64,
+    pub total_removed: u32,
+    pub collected_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Location {
@@ -190,7 +271,6 @@ pub struct Location {
     pub longitude: i64, // Degrees * 1_000_000
     pub radius: u32,
 }
-
 
 /// Internal compact storage representation of player progress.
 /// Does not store `player` or `hunt_id` — those are already the storage key.
@@ -223,9 +303,10 @@ pub struct StoredPlayerProgress {
     pub recent_submissions: Vec<u64>,
     pub clue_last_attempts: Map<u32, u64>,
     pub required_completed_count: u32,
+    /// The player's finishing position among all completions for this hunt,
+    /// frozen at the moment `is_completed` was set to `true`. 0 = not yet completed.
+    pub completion_rank: u32,
 }
-
-
 
 /// Public view of player progress, with `player` and `hunt_id` reconstructed from the key.
 #[contracttype]
@@ -242,6 +323,10 @@ pub struct PlayerProgress {
     pub completed_at: u64,
     pub is_completed: bool,
     pub reward_claimed: bool,
+    /// The player's finishing position among all completions for this hunt,
+    /// frozen at the moment `is_completed` was set to `true`.  Zero means the
+    /// player has not yet completed the hunt.
+    pub completion_rank: u32,
     pub recent_submissions: Vec<u64>,
     pub clue_last_attempts: Map<u32, u64>,
 }
@@ -260,14 +345,16 @@ impl PlayerProgress {
             completed_at: 0,
             is_completed: false,
             reward_claimed: false,
+            completion_rank: 0,
             recent_submissions: Vec::new(env),
             clue_last_attempts: Map::new(env),
         }
     }
 
-    /// Pack boolean flags into a single byte
-    fn bools_to_flags(is_completed: bool, reward_claimed: bool) -> u8 {
-        let mut flags = 0u8;
+    /// Pack boolean flags into a single u32
+    #[allow(dead_code)]
+    fn bools_to_flags(is_completed: bool, reward_claimed: bool) -> u32 {
+        let mut flags = 0u32;
         if is_completed {
             flags |= 0x01;
         }
@@ -282,13 +369,7 @@ impl PlayerProgress {
     /// `activated_at` is the hunt's activation timestamp, used to delta-encode
     /// `started_at` and `completed_at` into compact `u32` offsets.
     pub fn to_stored(&self, activated_at: u64) -> StoredPlayerProgress {
-        let mut flags: u32 = 0;
-        if self.is_completed {
-            flags |= 0b0000_0001;
-        }
-        if self.reward_claimed {
-            flags |= 0b0000_0010;
-        }
+        let flags = Self::bools_to_flags(self.is_completed, self.reward_claimed);
 
         // Delta-encode timestamps relative to hunt activation.
         let started_at_delta = self.started_at.saturating_sub(activated_at) as u32;
@@ -308,6 +389,7 @@ impl PlayerProgress {
             recent_submissions: self.recent_submissions.clone(),
             clue_last_attempts: self.clue_last_attempts.clone(),
             required_completed_count: self.required_completed_count,
+            completion_rank: self.completion_rank,
         }
     }
 
@@ -350,6 +432,7 @@ impl PlayerProgress {
             completed_at,
             is_completed: (stored.flags & 0b0000_0001) != 0,
             reward_claimed: (stored.flags & 0b0000_0010) != 0,
+            completion_rank: stored.completion_rank,
             recent_submissions: stored.recent_submissions,
             clue_last_attempts: stored.clue_last_attempts,
         }
@@ -388,9 +471,6 @@ impl PlayerProgress {
     ) -> Result<(), crate::errors::HuntErrorCode> {
         if self.has_requested_hint(clue_id) {
             return Err(crate::errors::HuntErrorCode::HintAlreadyUnlocked);
-        }
-        if self.total_score < penalty {
-            return Err(crate::errors::HuntErrorCode::InsufficientScore);
         }
         self.total_score = self.total_score.saturating_sub(penalty);
         self.hinted_clues.push_back(clue_id);
@@ -435,6 +515,7 @@ impl RewardConfig {
         max_winners: u32,
         nft_rarity: u32,
         nft_tier: u32,
+        nft_image_uri: Option<String>,
     ) -> Self {
         Self {
             xlm_pool,
@@ -444,6 +525,7 @@ impl RewardConfig {
             claimed_count: 0,
             nft_rarity,
             nft_tier,
+            nft_image_uri,
         }
     }
 
@@ -484,6 +566,14 @@ pub struct HuntStatusChangedEvent {
     pub hunt_id: u64,
     pub old_status: HuntStatus,
     pub new_status: HuntStatus,
+    pub changed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HuntPrivacyChangedEvent {
+    pub hunt_id: u64,
+    pub is_private: bool,
     pub changed_at: u64,
 }
 
@@ -534,7 +624,7 @@ pub struct ClueAddedEvent {
     pub question: String,
     pub points: u32,
     pub is_required: bool,
-    /// Difficulty multiplier (1-10).
+    /// Difficulty tier (1-5, 1 = easiest, 5 = hardest).
     pub difficulty: u32,
     /// Weight multiplier (default 1).
     pub weight: u32,
@@ -593,6 +683,16 @@ pub struct AnswerIncorrectEvent {
     pub hunt_id: u64,
     pub player: Address,
     pub clue_id: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AnswerPreviewedEvent {
+    pub hunt_id: u64,
+    pub player: Address,
+    pub clue_id: u32,
+    pub is_correct: bool,
     pub timestamp: u64,
 }
 
@@ -696,6 +796,13 @@ impl TimeBonusConfig {
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatorDailyHuntCount {
+    pub day: u64,
+    pub count: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RateLimitStatus {
     pub creations_today: u32,
     pub daily_limit: u32,
@@ -785,9 +892,53 @@ pub struct RegistrationDeadlineSetEvent {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct HuntDifficultyOverrideSetEvent {
+    pub hunt_id: u64,
+    pub caller: Address,
+    pub difficulty_override: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct PartialScoreClaimedEvent {
     pub hunt_id: u64,
     pub player: Address,
     pub partial_score: u32,
     pub clues_completed: u32,
+}
+
+/// Emitted when a co-creator is added to a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorAddedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when a co-creator is removed from a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorRemovedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when view-only access is granted to an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessGrantedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
+}
+
+/// Emitted when view-only access is revoked from an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessRevokedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
 }

@@ -680,3 +680,66 @@ fn test_multiple_hunts_at_maximum_size() {
         assert_eq!(hunt_1.total_clues, 100);
     });
 }
+
+#[test]
+fn test_rate_limit_single_storage_entry_across_days() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let core_id = setup_core_contract(&env);
+    let creator = Address::generate(&env);
+
+    let day_length: u64 = 86_400;
+    let days = [1_700_000_000u64, 1_700_086_400, 1_700_172_800];
+
+    for (i, day) in days.iter().enumerate() {
+        env.ledger().set_timestamp(*day);
+        as_core_contract(&env, &core_id, |env| {
+            HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, &format!("Rate Limit Hunt {}", i)),
+                String::from_str(env, "Storage bound test"),
+                None,
+                None,
+                0,
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    as_core_contract(&env, &core_id, |env| {
+        // Old per-day instance keys must not exist.
+        let old_day_keys = [
+            env.storage().instance().has(&(creator.clone(), days[0])),
+            env.storage().instance().has(&(creator.clone(), days[1])),
+            env.storage().instance().has(&(creator.clone(), days[2])),
+        ];
+        assert_eq!(old_day_keys, [false, false, false]);
+
+        // The bare Address key in instance storage must not exist either —
+        // RateLimiter writes to persistent storage under (Symbol("HRATE"), Address).
+        assert!(
+            !env.storage().instance().has(&creator),
+            "rate-limit must not be stored in instance storage"
+        );
+
+        // Exactly one entry exists: the namespaced persistent key.
+        let namespaced_key = (soroban_sdk::Symbol::new(env, "HRATE"), creator.clone());
+        assert!(
+            env.storage().persistent().has(&namespaced_key),
+            "rate-limit entry must exist under (HRATE, Address) in persistent storage"
+        );
+
+        // Verify it holds the correct day and count (one hunt created on day 3).
+        use hunty_core::rate_limit::RateLimitData;
+        let entry: RateLimitData = env
+            .storage()
+            .persistent()
+            .get(&namespaced_key)
+            .expect("rate-limit entry should exist");
+        assert_eq!(entry.day, days[2] / day_length);
+        assert_eq!(entry.count, 1);
+    });
+}

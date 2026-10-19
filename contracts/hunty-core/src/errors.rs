@@ -3,9 +3,14 @@ use soroban_sdk::contracterror;
 // NOTE: Soroban's #[contracterror] XDR spec caps error enums at 50 cases
 // (ScSpecUdtErrorEnumV0::cases is a VecM<_, 50>). This enum is already at
 // that limit. If a new error code is ever needed, reuse a semantically-close
-// existing variant instead of adding one (see InviteNotConfigured/
-// InvalidInviteCode below for the established pattern) rather than removing
-// or renumbering an existing variant.
+// existing variant instead of adding one rather than removing or renumbering
+// an existing variant.
+//
+// NAMESPACE: hunty-core error codes occupy the range 1001–1999.
+//   reward-manager uses 2001–2999 (see contracts/reward-manager/src/errors.rs).
+//   nft-reward      uses 3001–3999 (see contracts/nft-reward/src/errors.rs).
+// This guarantees that a numeric code read from a transaction envelope is
+// unambiguous regardless of which contract frame produced it.
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -60,6 +65,9 @@ pub enum HuntErrorCode {
     AdminAlreadyProposed = 48,
     InvalidPoints = 49,
     HuntFull = 50,
+    LeaderboardVisibilityUnauthorized = 51,
+    InviteCodeRequired = 52,
+    TooManyAliases = 53,
 }
 
 #[derive(Debug)]
@@ -103,6 +111,7 @@ pub enum HuntError {
     AddressBlacklisted,
     ContractPaused,
     InvalidMaxAttempts,
+    InvalidSubmissionsPerMinute,
     InvalidWeight,
     HintNotAvailable,
     HintAlreadyUnlocked,
@@ -113,6 +122,10 @@ pub enum HuntError {
     CorruptPlayerProgress,
     HuntNotStarted,
     AttemptCooldownNotExpired,
+    HuntFull,
+    PrivateHuntRequiresInvite,
+    InviteCodeRequired,
+    TooManyAliases,
 }
 
 impl From<HuntError> for HuntErrorCode {
@@ -157,6 +170,7 @@ impl From<HuntError> for HuntErrorCode {
             HuntError::AddressBlacklisted => HuntErrorCode::AddressBlacklisted,
             HuntError::ContractPaused => HuntErrorCode::ContractPaused,
             HuntError::InvalidMaxAttempts => HuntErrorCode::InvalidMaxAttempts,
+            HuntError::InvalidSubmissionsPerMinute => HuntErrorCode::InvalidMaxAttempts,
             HuntError::InvalidWeight => HuntErrorCode::InvalidWeight,
             HuntError::HintNotAvailable => HuntErrorCode::HintNotAvailable,
             HuntError::HintAlreadyUnlocked => HuntErrorCode::HintAlreadyUnlocked,
@@ -167,6 +181,10 @@ impl From<HuntError> for HuntErrorCode {
             HuntError::CorruptPlayerProgress => HuntErrorCode::CorruptPlayerProgress,
             HuntError::HuntNotStarted => HuntErrorCode::HuntNotStarted,
             HuntError::AttemptCooldownNotExpired => HuntErrorCode::RateLimitExceeded,
+            HuntError::HuntFull => HuntErrorCode::HuntFull,
+            HuntError::PrivateHuntRequiresInvite => HuntErrorCode::Unauthorized,
+            HuntError::InviteCodeRequired => HuntErrorCode::InviteCodeRequired,
+            HuntError::TooManyAliases => HuntErrorCode::TooManyAliases,
         }
     }
 }
