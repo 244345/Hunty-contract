@@ -1,12 +1,14 @@
-use crate::storage::Storage;
 use crate::METADATA_SCHEMA_VERSION;
 use hunty_migration::{
     MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeCancelledEvent,
     UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
 };
-use soroban_sdk::{Address, BytesN, Env, Symbol};
+use soroban_sdk::{symbol_short, Address, BytesN, Env, Symbol};
 
 pub use hunty_migration::MigrationReport;
+
+const NFT_COUNTER_KEY: Symbol = symbol_short!("CN");
+const NFT_VERSION_KEY: Symbol = symbol_short!("NFTV");
 
 /// Per-contract migration steps for NftReward storage layouts.
 pub struct NftRewardMigration;
@@ -340,13 +342,20 @@ impl NftRewardMigration {
 
     /// v0 -> v1: retroactively set metadata version key on legacy NFTs.
     fn migrate_v0_to_v1(env: &Env) {
-        let total = Storage::get_nft_counter(env);
+        let total: u64 = env
+            .storage()
+            .persistent()
+            .get(&NFT_COUNTER_KEY)
+            .unwrap_or(0);
         for nft_id in 1..=total {
+            let version_key = (NFT_VERSION_KEY, nft_id);
             // Skip NFTs that already have an explicit version key.
-            if Storage::has_nft_version_key(env, nft_id) {
+            if env.storage().persistent().has(&version_key) {
                 continue;
             }
-            Storage::set_nft_version(env, nft_id, METADATA_SCHEMA_VERSION);
+            env.storage()
+                .persistent()
+                .set(&version_key, &METADATA_SCHEMA_VERSION);
         }
     }
 
