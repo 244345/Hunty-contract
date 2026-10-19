@@ -163,6 +163,10 @@ pub struct RewardPoolStatus {
     pub total_deposited: i128,
     /// Cumulative total distributed from this pool.
     pub total_distributed: i128,
+    /// Cumulative total refunded from this pool via `refund_pool`. Together
+    /// with `balance`, `total_distributed` and `total_migrated_out` this
+    /// satisfies `total_deposited == balance + total_distributed + total_refunded + total_migrated_out` (#1286).
+    pub total_refunded: i128,
     /// Cumulative total migrated out of this pool via `migrate_pool`.
     /// Together with `total_distributed` and `total_refunded` these satisfy:
     /// `total_deposited == balance + total_distributed + total_refunded + total_migrated_out`
