@@ -112,6 +112,16 @@ impl Drop for ReentrancyGuard {
     }
 }
 
+/// Event emitted when a contract is added to or removed from the authorized
+/// distributor list (`AUTH_ADD` / `AUTH_REM`), so the change is traceable
+/// on-chain (#1284).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AuthorizedContractEvent {
+    pub admin: Address,
+    pub contract: Address,
+}
+
 /// Event emitted when a reward pool is created for a hunt.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -580,6 +590,10 @@ impl RewardManager {
     ) -> Result<(), RewardErrorCode> {
         Self::require_admin(&env, &admin)?;
         Storage::add_authorized_contract(&env, &contract);
+        env.events().publish(
+            (symbol_short!("AUTH_ADD"),),
+            AuthorizedContractEvent { admin, contract },
+        );
         Ok(())
     }
 
@@ -592,6 +606,10 @@ impl RewardManager {
     ) -> Result<(), RewardErrorCode> {
         Self::require_admin(&env, &admin)?;
         Storage::remove_authorized_contract(&env, &contract);
+        env.events().publish(
+            (symbol_short!("AUTH_REM"),),
+            AuthorizedContractEvent { admin, contract },
+        );
         Ok(())
     }
 
