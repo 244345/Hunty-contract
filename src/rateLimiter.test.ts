@@ -131,6 +131,26 @@ describe('MintRateLimiter', () => {
       expect(() => limiter.updateConfig({ windowMs: 500 }, 'secret')).toThrow('windowMs must be at least 1000');
     });
 
+    it('rejects non-integer, string and NaN values', () => {
+      expect(() => limiter.updateConfig({ maxMints: '5' as unknown as number }, 'secret')).toThrow('maxMints');
+      expect(() => limiter.updateConfig({ maxMints: 2.5 }, 'secret')).toThrow('maxMints');
+      expect(() => limiter.updateConfig({ maxMints: NaN }, 'secret')).toThrow('maxMints');
+      expect(() => limiter.updateConfig({ windowMs: 'abc' as unknown as number }, 'secret')).toThrow('windowMs');
+      expect(() => limiter.updateConfig({ windowMs: 1.5 }, 'secret')).toThrow('windowMs');
+      expect(() => limiter.updateConfig({ windowMs: NaN }, 'secret')).toThrow('windowMs');
+    });
+
+    it('rejects values above the upper bound', () => {
+      expect(() => limiter.updateConfig({ maxMints: 10_001 }, 'secret')).toThrow('maxMints');
+      expect(() => limiter.updateConfig({ windowMs: 86_400_001 }, 'secret')).toThrow('windowMs');
+    });
+
+    it('rejects unknown keys', () => {
+      expect(() =>
+        limiter.updateConfig({ maxMints: 5, bogus: 1 } as unknown as { maxMints: number }, 'secret'),
+      ).toThrow('Unknown config key');
+    });
+
     it('applies updated limits immediately', async () => {
       await limiter.mint('addr1');
       await limiter.mint('addr1');
