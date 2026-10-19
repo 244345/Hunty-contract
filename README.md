@@ -391,6 +391,10 @@ pnpm build:mainnet
 pnpm start:staging
 ```
 
+#### Deploying behind a proxy or load balancer
+
+The global `/mint` limiter (100 requests / 15 min) keys on `req.ip`. Behind a reverse proxy or load balancer that is the proxy's address unless Express is told to trust it, which makes all users share one limit. Set `TRUST_PROXY` to the number of trusted proxy hops in front of the app (for example `1` for a single load balancer), or to an Express trust-proxy expression such as `loopback, 10.0.0.0/8`. It is optional: when unset, proxies are not trusted (the previous behavior), which is correct only when the app is exposed directly. Only enable it when your proxy overwrites client-supplied `X-Forwarded-For`, otherwise clients can spoof their IP and dodge the limit.
+
 Contract addresses are tracked per environment in:
 
 - `config/contracts.testnet.json`
@@ -531,6 +535,8 @@ Admin assignment is split across exactly two paths, both authorization-gated. Th
 unguarded shortcut, so an uninitialized contract cannot be taken over by the first caller after
 deployment.
 
+- **`__constructor(admin)`** – Sets the admin atomically at deployment time. Deploy scripts
+  must pass the admin address as a constructor arg so there is no front-running window.
 - **`initialize_admin`** – Sets the admin for the very first time. The supplied address must
   authenticate (`require_auth`), and the call is rejected if an admin is already set. There is no
   other way to assign the initial admin.

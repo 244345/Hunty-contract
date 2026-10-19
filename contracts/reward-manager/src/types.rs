@@ -34,10 +34,10 @@ pub struct DistributionProof {
 }
 
 /// Resolution outcome for a manually resolved failed distribution.
-/// 
+///
 /// This enum tracks the final status of distributions that failed during
 /// their initial execution and were later resolved by an administrator.
-/// 
+///
 /// Related to issue #364: stuck-distribution resolution flow.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +146,11 @@ pub struct RewardPoolConfig {
     /// Optional exact-rank reward tiers. A matching frozen completion rank
     /// takes precedence over flat and time-based amounts.
     pub rank_based_tiers: Vec<RankRewardTier>,
+    /// Address that most recently froze this pool, or `None` when the pool is
+    /// not frozen. Tracks whether the current freeze was issued by the pool
+    /// creator or the contract admin so that an admin-issued freeze can only be
+    /// lifted by the admin (#1077).
+    pub frozen_by: Option<Address>,
 }
 
 /// Full status of a reward pool, returned by get_reward_pool().
@@ -158,15 +163,27 @@ pub struct RewardPoolStatus {
     pub total_deposited: i128,
     /// Cumulative total distributed from this pool.
     pub total_distributed: i128,
+    /// Cumulative total refunded from this pool via `refund_pool`. Together
+    /// with `balance`, `total_distributed` and `total_migrated_out` this
+    /// satisfies `total_deposited == balance + total_distributed + total_refunded + total_migrated_out` (#1286).
+    pub total_refunded: i128,
+    /// Cumulative total migrated out of this pool via `migrate_pool`.
+    /// Together with `total_distributed` and `total_refunded` these satisfy:
+    /// `total_deposited == balance + total_distributed + total_refunded + total_migrated_out`
+    pub total_migrated_out: i128,
     /// Pool creator / only authorized funder.
     pub creator: Address,
     /// Minimum XLM per distribution (0 = no minimum).
     pub min_distribution_amount: i128,
     /// Whether distributions from this pool are temporarily frozen.
     pub frozen: bool,
+    /// Address that most recently froze this pool, or `None` when not frozen.
+    /// See `RewardPoolConfig::frozen_by` (#1077).
+    pub frozen_by: Option<Address>,
 }
 
-/// Pending NFT mint that failed and can be retried by the admin.
+/// Pending NFT mint that failed and can be retried by the player or anyone
+/// paying the transaction fee on behalf of the player.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingNftMint {
@@ -218,6 +235,29 @@ pub enum PoolOperation {
     Migrate = 6,
     /// Unused balance was refunded to the pool creator.
     Refund = 7,
+    /// `update_pool_config` changed `min_distribution_amount` (`amount` = new value).
+    UpdateMinAmount = 8,
+    /// `set_pool_target_amount` changed the funding target (`amount` = new value).
+    SetTargetAmount = 9,
+    /// `set_min_distribution_interval` changed the distribution cooldown.
+    SetDistributionInterval = 10,
+    /// `set_distribution_mode` switched between Fixed and Proportional.
+    SetDistributionMode = 11,
+    /// `set_pool_nft_contract` set or cleared the pool's NFT contract.
+    SetNftContract = 12,
+    /// `add_delegate` authorised a new distribution delegate.
+    AddDelegate = 13,
+    /// `remove_delegate` revoked a distribution delegate.
+    RemoveDelegate = 14,
+    /// `set_vesting_period_secs` changed the vesting period.
+    SetVestingPeriod = 15,
+    /// `set_pool_tiers` replaced the time-based tier schedule.
+    SetTimeTiers = 16,
+    /// `set_pool_rank_tiers` replaced the rank-based tier schedule.
+    SetRankTiers = 17,
+    /// `set_claim_deadline` changed the unix timestamp after which claims
+    /// are no longer allowed (0 = disabled).
+    SetClaimDeadline = 18,
 }
 
 /// Comprehensive statistics for a reward pool, returned by get_pool_statistics().
@@ -325,4 +365,38 @@ pub struct DistributionAnalytics {
     pub min: i128,
     /// Maximum XLM amount in a single distribution (stroops). 0 if count is 0.
     pub max: i128,
+}
+
+// ---------------------------------------------------------------------------
+// HuntyCore cross-contract interface (issue #1078)
+// ---------------------------------------------------------------------------
+
+/// Mirror of `hunty-core::types::HuntStatus`.
+///
+/// Variant names, order, and discriminants MUST stay in sync with
+/// `contracts/hunty-core/src/types.rs`. The XDR discriminant is what
+/// Soroban compares across the cross-contract boundary, so any mismatch
+/// causes `try_get_hunt_status` to return an error and `require_hunt_editable`
+/// to conservatively reject the call with `HuntLocked`.
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum HuntStatus {
+    Draft = 0,
+    Active = 1,
+    Completed = 2,
+    Cancelled = 3,
+    Paused = 4,
+    EmergencyStopped = 5,
+    Archived = 6,
+}
+
+/// Minimal cross-contract client for HuntyCore.
+///
+/// Only `get_hunt_status` is needed here; the full hunty-core interface lives
+/// in its own crate and is not a compile-time dependency of reward-manager.
+#[soroban_sdk::contractclient(name = "HuntyCoreClient")]
+pub trait HuntyCoreInterface {
+    /// Returns the current status of a hunt.
+    fn get_hunt_status(env: soroban_sdk::Env, hunt_id: u64) -> HuntStatus;
 }

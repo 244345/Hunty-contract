@@ -81,4 +81,53 @@ describe('createApp', () => {
     expect(body.minted).toBe(true);
     expect(body.mintsInWindow).toBe(1);
   });
+
+  it('keys the global limiter on the forwarded client IP when trustProxy is set', async () => {
+    const app = createApp({ config: { ...config, trustProxy: 1 }, limiter });
+    const listening = await listen(app);
+    server = listening.server;
+
+    const post = (ip: string) =>
+      fetch(`${listening.baseUrl}/mint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+        body: JSON.stringify({ address: 'invalid' }),
+      });
+
+    for (let i = 0; i < 100; i++) {
+      expect((await post('203.0.113.1')).status).toBe(400);
+    }
+    expect((await post('203.0.113.1')).status).toBe(429);
+    // A different client behind the same proxy is not affected.
+    expect((await post('203.0.113.2')).status).toBe(400);
+  });
+
+  it('rate-limits repeated admin secret guesses', async () => {
+    const app = createApp({ config, limiter });
+    const listening = await listen(app);
+    server = listening.server;
+
+    for (let i = 0; i < 5; i++) {
+      const res = await fetch(`${listening.baseUrl}/admin/config`, {
+        headers: { 'x-admin-secret': 'wrong' },
+      });
+      expect(res.status).toBe(403);
+    }
+    const limited = await fetch(`${listening.baseUrl}/admin/config`, {
+      headers: { 'x-admin-secret': 'wrong' },
+    });
+    expect(limited.status).toBe(429);
+  });
+
+  it('rejects invalid addresses on GET /mint/count/:address', async () => {
+    const app = createApp({ config, limiter });
+    const listening = await listen(app);
+    server = listening.server;
+
+    const res = await fetch(`${listening.baseUrl}/mint/count/not-an-address`);
+    expect(res.status).toBe(400);
+
+    const ok = await fetch(`${listening.baseUrl}/mint/count/${VALID_ADDRESS}`);
+    expect(ok.status).toBe(200);
+  });
 });

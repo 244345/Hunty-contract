@@ -37,8 +37,11 @@ fn reactivation_preserves_activation_timestamp_and_registration_gate() {
             None,
         )
         .unwrap();
-        HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
         hunt_id
+    });
+
+    env.as_contract(&contract_id, || {
+        HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
     });
 
     let activated_at = env.as_contract(&contract_id, || {
