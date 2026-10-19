@@ -2951,6 +2951,58 @@ mod test {
         assert_eq!(get_balance(&env, &token_address, &contract_id), 0);
     }
 
+    /// Verifies that when a sponsor funds someone else's hunt and the hunt is cancelled,
+    /// the sponsor receives their share back upon refund_pool rather than the creator
+    /// receiving the sponsor's tokens.
+    #[test]
+    fn test_sponsor_funds_hunt_cancelled_sponsor_gets_share_back() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (contract_id, token_address, token_admin) = setup(&env);
+        let creator = Address::generate(&env);
+        let sponsor = Address::generate(&env);
+        let hunty_core = env.register(MockHuntyCore, ());
+        let hunt_id = 999;
+
+        mint_tokens(&env, &token_address, &token_admin, &creator, 100_000_000);
+        mint_tokens(&env, &token_address, &token_admin, &sponsor, 100_000_000);
+
+        env.as_contract(&contract_id, || {
+            init_and_create_pool(
+                &env,
+                token_admin.clone(),
+                &token_address,
+                &hunty_core,
+                creator.clone(),
+                hunt_id,
+            );
+
+            // Sponsor funds someone else's hunt
+            RewardManager::fund_reward_pool(env.clone(), sponsor.clone(), hunt_id, 50_000_000).unwrap();
+
+            // Verify sponsor is recorded as funder
+            assert_eq!(
+                RewardManager::get_pool_funder_contribution(env.clone(), hunt_id, sponsor.clone()),
+                50_000_000
+            );
+            assert_eq!(
+                RewardManager::get_pool_funders(env.clone(), hunt_id),
+                Vec::from_array(&env, [sponsor.clone()])
+            );
+
+            // Hunt cancelled/ended: creator calls refund_pool
+            RewardManager::refund_pool(env.clone(), creator.clone(), hunt_id).unwrap();
+
+            assert_eq!(RewardManager::get_pool_balance(env.clone(), hunt_id), 0);
+        });
+
+        // Sponsor gets their 50M back in full (100M total balance restored)
+        assert_eq!(get_balance(&env, &token_address, &sponsor), 100_000_000);
+        // Creator did not fund anything, so creator balance remains 100M (did not steal sponsor's funds)
+        assert_eq!(get_balance(&env, &token_address, &creator), 100_000_000);
+        assert_eq!(get_balance(&env, &token_address, &contract_id), 0);
+    }
+
     /// Verifies pro-rata splitting still holds after the balance has been
     /// partially drawn down by a distribution — the split is proportional to
     /// each funder's *contribution*, applied to whatever balance remains, not
