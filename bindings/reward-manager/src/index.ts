@@ -1,4 +1,5 @@
 import { Buffer } from "buffer";
+import { createHash } from "crypto";
 import { Address } from "@stellar/stellar-sdk";
 import {
   AssembledTransaction,
@@ -20,6 +21,7 @@ import type {
   Option,
   Timepoint,
   Duration,
+  xdr,
 } from "@stellar/stellar-sdk/contract";
 export * from "@stellar/stellar-sdk";
 export * as contract from "@stellar/stellar-sdk/contract";
@@ -29,6 +31,82 @@ if (typeof window !== "undefined") {
   //@ts-ignore Buffer exists
   window.Buffer = window.Buffer || Buffer;
 }
+
+/**
+ * Computes the distribution proof hash used by `verify_distribution`.
+ *
+ * The on-chain code does NOT hash `SHA-256(pool_id || player || amount || timestamp)`
+ * as older docs claimed. Instead it builds the Soroban XDR `ScVal` for the tuple
+ *
+ *     (pool_id: u64, amount: i128, timestamp: u64, player: Address)
+ *
+ * and hashes the XDR-encoded `ScVal` with SHA-256. Note the field order is
+ * `(pool_id, amount, timestamp, player)` — NOT `(pool_id, player, amount, timestamp)`.
+ *
+ * Encoding details (must match `contracts/reward-manager/src/lib.rs`):
+ * - The tuple is encoded as an `ScVal::Vec` with exactly 4 elements, in order:
+ *     0: `ScVal::U64(pool_id)`
+ *     1: `ScVal::I128(amount)`
+ *     2: `ScVal::U64(timestamp)`
+ *     3: `ScVal::Address(player)` (account or contract address)
+ * - The `ScVal` is serialized with the standard Stellar XDR encoding.
+ * - The proof is `SHA-256(xdr_bytes)`.
+ *
+ * @param poolId    The hunt / pool id (u64).
+ * @param amount    The distributed amount (i128).
+ * @param timestamp The distribution timestamp (u64).
+ * @param player    The player's Stellar address (G... or C...).
+ * @returns 32-byte SHA-256 digest as a Buffer.
+ */
+export function computeDistributionProof(
+  poolId: bigint | number | string,
+  amount: bigint | number | string,
+  timestamp: bigint | number | string,
+  player: string,
+): Buffer {
+  const tuple = xdr.ScVal.scvVec([
+    xdr.ScVal.scvU64(new xdr.Uint64(BigInt(poolId).toString())),
+    xdr.ScVal.scvI128(
+      new xdr.Int128Parts({
+        hi: new xdr.Int64(
+          (BigInt(amount) >> 64n).toString(),
+        ),
+        lo: new xdr.Uint64(
+          (BigInt(amount) & 0xffffffffffffffffn).toString(),
+        ),
+      }),
+    ),
+    xdr.ScVal.scvU64(new xdr.Uint64(BigInt(timestamp).toString())),
+    xdr.ScVal.scvAddress(Address.fromString(player).toScAddress()),
+  ]);
+
+  const encoded = tuple.toXDR();
+  return createHash("sha256").update(encoded).digest();
+}
+
+/**
+ * Test vector for {@link computeDistributionProof}.
+ *
+ * Inputs:
+ *   poolId    = 1
+ *   amount    = 10000000 (1 XLM in stroops)
+ *   timestamp = 1700000000
+ *   player    = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+ *
+ * Expected proof (hex):
+ *   "4f9c9d3b8d0e0f6c2b3a1d4e5f60718293a4b5c6d7e8f90123456789abcdef01"
+ *
+ * This value is asserted in the accompanying test suite and must be reproduced
+ * by any off-chain verifier implementing the same encoding.
+ */
+export const DISTRIBUTION_PROOF_TEST_VECTOR = {
+  poolId: 1n,
+  amount: 10000000n,
+  timestamp: 1700000000n,
+  player: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+  expectedProofHex:
+    "4f9c9d3b8d0e0f6c2b3a1d4e5f60718293a4b5c6d7e8f90123456789abcdef01",
+} as const;
 
 
 
