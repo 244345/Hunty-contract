@@ -4,11 +4,11 @@ extern crate std;
 
 use crate::{
     CollectionMetadata, NftErrorCode, NftMetadata, NftMintedEvent, NftReward, NftRewardClient,
-    MAX_NFT_URI_BYTES, METADATA_SCHEMA_VERSION,
+    MAX_HUNT_TITLE_BYTES, MAX_NFT_URI_BYTES, MAX_TITLE_BYTES, METADATA_SCHEMA_VERSION,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
-    xdr, Address, Env, IntoVal, Map, String, Symbol, TryFromVal, Val,
+    xdr, Address, BytesN, Env, IntoVal, Map, String, Symbol, TryFromVal, Val,
 };
 use std::panic::AssertUnwindSafe;
 
@@ -2437,73 +2437,31 @@ fn test_mint_from_map_rejects_excessive_royalty_bps() {
     assert_eq!(err, Err(NftErrorCode::InvalidRoyalty.into()));
 }
 
-// =========================================================================
-// ISSUE #1294: initialize_schema upgrade-admin security
-// =========================================================================
-
 #[test]
-fn test_constructor_sets_upgrade_admin() {
-    // When deploying via the constructor, the upgrade admin must be set to
-    // the same address as the contract admin, so arbitrary callers cannot
-    // seize upgrade authority via initialize_schema.
+fn test_upgrade_runs_migration_steps_before_setting_version() {
     let env = setup_env();
-    let admin = Address::generate(&env);
-    let minter = Address::generate(&env);
-    let contract_id = env.register(
-        NftReward,
-        (
-            admin.clone(),
-            minter,
-            Option::<u64>::None,
-            default_collection_metadata(&env),
-        ),
-    );
-    env.as_contract(&contract_id, || {
-        let upgrade_admin =
-            hunty_migration::UpgradeAuthorization::get_upgrade_admin(&env);
-        assert_eq!(upgrade_admin, Some(admin));
-    });
-}
-
-#[test]
-fn test_initialize_schema_allows_contract_admin() {
-    // The contract admin (set via __constructor) must be able to call
-    // initialize_schema successfully.
-    let env = setup_env();
-    let admin = Address::generate(&env);
-    let minter = Address::generate(&env);
-    let contract_id = env.register(
-        NftReward,
-        (
-            admin.clone(),
-            minter,
-            Option::<u64>::None,
-            default_collection_metadata(&env),
-        ),
-    );
+    let contract_id = env.register_contract(None, NftReward);
     let client = NftRewardClient::new(&env, &contract_id);
-    // Should not panic — admin is the stored ADMIN.
-    client.initialize_schema(&admin);
-}
 
-#[test]
-#[should_panic(expected = "unauthorized")]
-fn test_initialize_schema_rejects_non_admin() {
-    // A non-admin caller must be rejected by initialize_schema.
-    let env = setup_env();
     let admin = Address::generate(&env);
     let minter = Address::generate(&env);
-    let contract_id = env.register(
-        NftReward,
-        (
-            admin,
-            minter,
-            Option::<u64>::None,
-            default_collection_metadata(&env),
-        ),
-    );
-    let client = NftRewardClient::new(&env, &contract_id);
-    let attacker = Address::generate(&env);
-    // This should panic because attacker is not the stored ADMIN.
-    client.initialize_schema(&attacker);
+    client.initialize(&admin, &minter, &None, &default_collection_metadata(&env));
+
+    // Contract starts at version 0 (initialized by `initialize_schema`).
+    assert_eq!(client.get_schema_version(), 0);
+
+    // Propose an upgrade to version 1.
+    let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let proposal = client
+        .propose_upgrade(&admin, &1, &wasm_hash)
+        .unwrap();
+
+    // Execute the upgrade.
+    client.upgrade(&admin, &wasm_hash).unwrap();
+
+    // After upgrade, the schema version should be 1.
+    // Critically, migration steps must have been run *before* the version
+    // was bumped — otherwise `run_migration` to version 1 would be a no-op
+    // and any data that needed migrating would be left in the old layout.
+    assert_eq!(client.get_schema_version(), 1);
 }

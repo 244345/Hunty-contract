@@ -535,6 +535,8 @@ Admin assignment is split across exactly two paths, both authorization-gated. Th
 unguarded shortcut, so an uninitialized contract cannot be taken over by the first caller after
 deployment.
 
+- **`__constructor(admin)`** – Sets the admin atomically at deployment time. Deploy scripts
+  must pass the admin address as a constructor arg so there is no front-running window.
 - **`initialize_admin`** – Sets the admin for the very first time. The supplied address must
   authenticate (`require_auth`), and the call is rejected if an admin is already set. There is no
   other way to assign the initial admin.

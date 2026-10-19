@@ -12,6 +12,19 @@ _No contract API functions found._
 
 ### `HuntyCore`
 
+#### `__constructor`
+
+Sets the contract admin atomically during deployment, so no one can
+front-run initialization and claim admin rights. New deployments must pass
+the admin address as a constructor arg; `initialize_admin` remains only for
+contracts deployed before the constructor existed.
+
+**Signature:**
+
+```rust
+pub fn __constructor(env: Env, admin: Address)
+```
+
 #### `initialize_admin`
 
 Sets the contract admin once. Subsequent calls require current admin auth via set_admin.
@@ -1337,7 +1350,8 @@ secrecy guarantee; answer verification remains on-chain through plaintext submis
 * `env` - The Soroban environment
 * `hunt_id` - The hunt to add the clue to
 * `question` - The clue question text (max 2000 chars, non-empty)
-* `answer` - Plain-text answer; normalized (trimmed, lowercased) then hashed
+* `answer` - Plain-text answer; normalized (trimmed, whitespace-collapsed,
+ASCII-lowercased) then hashed
 * `points` - Points awarded for solving this clue (must be within 1..=10_000)
 * `is_required` - Whether this clue must be solved to complete the hunt
 * `difficulty` - Optional difficulty tier (defaults to 1) used as a multiplier on
@@ -1442,6 +1456,9 @@ Adds multiple clues to a draft hunt in one invocation. Only the hunt creator can
 
 The batch is validated against the per-hunt clue cap before writing any new clues,
 so a request that would exceed the limit fails without partially adding clues.
+
+Each [`BatchClueInput`] carries the same optional `weight` as [`Self::add_clue`],
+so batch-added clues can be configured exactly like single-clue additions.
 
 **Signature:**
 
@@ -1762,7 +1779,11 @@ pub fn search_hunts(env: Env, title_substring: String, offset: u32, limit: u32, 
 
 #### `set_hunt_categories`
 
-Updates categories for a draft hunt. At most five categories are allowed.
+Updates categories for a draft hunt. At most five distinct categories are allowed.
+
+Categories are sanitized (trimmed, validated) and duplicates are collapsed,
+preserving first-seen order, so repeated entries do not use up the five
+slots. Comparison is case-sensitive: `"art"` and `"Art"` are distinct.
 
 **Signature:**
 
@@ -2146,9 +2167,28 @@ pub fn list_clues_paginated(env: Env, hunt_id: u64, page: u32, page_size: u32) -
 
 #### `activate_hunt`
 
-Normalizes answer (trim, lowercase) and returns SHA256 hash as BytesN<32>.
-Uses hunt_id and clue_id as salt to prevent rainbow table precomputation.
-Hashing scheme: SHA256(hunt_id || clue_id || normalized_answer)
+Normalizes an answer and returns SHA256(hunt_id || clue_id || normalized_answer).
+
+The hunt and clue ids act as a salt so the hashes cannot be precomputed
+from a rainbow table of common answers.
+
+Normalization is applied to the raw UTF-8 bytes:
+
+- leading and trailing ASCII whitespace (space, `\t`, `\n`, `\r`) is trimmed;
+- an internal run of those characters collapses to a single space, so
+`"New   York"` and `"new york"` produce the same hash;
+- ASCII `A-Z` is lowercased.
+
+# Non-ASCII input
+
+Non-ASCII characters are preserved byte-for-byte: `ÉCOLE` lowercases to
+`École`, not `école`. The contract cannot perform Unicode case folding or
+normalization on-chain, so creators who expect accented or non-Latin
+spellings should register the variants with [`Self::add_clue_aliases`].
+
+Off-chain callers of [`Self::submit_answer_with_hash`] must apply exactly
+this normalization before hashing (see `bindings/hunty-core`
+`hashAnswer`).
 Returns true if `hash` is already present in `hashes`.
 Resolves the XLM amount for the completing player.
 
@@ -4137,6 +4177,12 @@ Variant of `submit_answer` that accepts a precomputed SHA256 answer hash.
 
 Shares the incorrect-answer semantics of `submit_answer`: a wrong answer
 returns `Ok(false)` and commits the failed attempt.
+
+The hash must be built with exactly the normalization described on
+[`Self::normalize_and_hash_answer`]: outer ASCII whitespace trimmed,
+internal runs collapsed to one space, ASCII `A-Z` lowercased, non-ASCII
+bytes unchanged. Off-chain callers can use the `hashAnswer` helper in
+`bindings/hunty-core`.
 
 **Signature:**
 
