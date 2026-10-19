@@ -189,6 +189,16 @@ pub struct NftMintFailedEvent {
     pub nft_contract: Option<Address>,
 }
 
+/// Event emitted when a failed NFT mint is successfully retried.
+/// Indexers that observed `NFT_FAIL` can use this to see the resolution.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct NftMintRetriedEvent {
+    pub hunt_id: u64,
+    pub player: Address,
+    pub nft_id: u64,
+}
+
 /// Event emitted when admin withdraws unclaimed rewards from a pool.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2757,6 +2767,8 @@ impl RewardManager {
     ) -> Result<u64, RewardErrorCode> {
         caller.require_auth();
 
+        Self::ensure_distribution_allowed(env.clone())?;
+
         let pending = Storage::get_pending_nft_mint(&env, hunt_id, &player)
             .ok_or(RewardErrorCode::NftMintPendingNotFound)?;
 
@@ -2786,6 +2798,15 @@ impl RewardManager {
         }
 
         Storage::remove_pending_nft_mint(&env, hunt_id, &player);
+
+        env.events().publish(
+            (symbol_short!("NFT_RTRY"), hunt_id),
+            NftMintRetriedEvent {
+                hunt_id,
+                player: player.clone(),
+                nft_id,
+            },
+        );
 
         Ok(nft_id)
     }
