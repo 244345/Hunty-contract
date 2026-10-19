@@ -174,6 +174,13 @@ pub struct HuntyCore;
 #[allow(clippy::too_many_arguments)]
 #[contractimpl]
 impl HuntyCore {
+    /// Constructor - runs atomically during deployment.
+    /// Sets the admin in the same transaction as deployment so no one can
+    /// front-run `initialize_admin` and claim admin rights.
+    pub fn __constructor(env: Env, admin: Address) {
+        Storage::set_admin(&env, &admin);
+    }
+
     /// Sets the contract admin once. Subsequent calls require current admin auth via set_admin.
     pub fn initialize_admin(env: Env, admin: Address) -> Result<(), HuntErrorCode> {
         admin.require_auth();

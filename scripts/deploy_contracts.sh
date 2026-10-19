@@ -68,8 +68,9 @@ DEPLOYER_ADDRESS=$(stellar keys address "$SOURCE_ACCOUNT")
 # Query native XLM token address for the network
 XLM_TOKEN_ADDRESS=$(stellar contract id asset --asset native --network "$NETWORK")
 
-# Deploy hunty-core first (no constructor args needed)
-HUNTY_CORE_ID="$(deploy_contract hunty_core)"
+# Deploy hunty-core with constructor arg: admin (set atomically at deploy
+# time so initialize_admin cannot be front-run)
+HUNTY_CORE_ID="$(deploy_contract hunty_core "$DEPLOYER_ADDRESS")"
 
 # Deploy reward-manager with constructor args: admin, xlm_token, hunty_core
 REWARD_MANAGER_ID="$(deploy_contract reward_manager \
@@ -78,7 +79,9 @@ REWARD_MANAGER_ID="$(deploy_contract reward_manager \
   "$HUNTY_CORE_ID")"
 
 # Deploy nft-reward with constructor args: admin, minter, max_supply, metadata
-# max_supply = 0 means unlimited (optional, 0 = None in contract)
+# max_supply is Option<u64>: pass null (None) for unlimited.
+# Do NOT pass "0" — the CLI encodes it as Some(0), capping supply at zero so
+# every mint fails with MaxSupplyReached.
 # metadata: name, description, total_supply, creator
 # The minter MUST be the reward-manager contract (not the deployer) so
 # reward-manager can mint NFTs during distribution.

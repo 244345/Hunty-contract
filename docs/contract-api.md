@@ -12,6 +12,19 @@ _No contract API functions found._
 
 ### `HuntyCore`
 
+#### `__constructor`
+
+Sets the contract admin atomically during deployment, so no one can
+front-run initialization and claim admin rights. New deployments must pass
+the admin address as a constructor arg; `initialize_admin` remains only for
+contracts deployed before the constructor existed.
+
+**Signature:**
+
+```rust
+pub fn __constructor(env: Env, admin: Address)
+```
+
 #### `initialize_admin`
 
 Sets the contract admin once. Subsequent calls require current admin auth via set_admin.
