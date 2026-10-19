@@ -4,7 +4,7 @@ extern crate std;
 
 use crate::{
     CollectionMetadata, NftErrorCode, NftMetadata, NftMintedEvent, NftReward, NftRewardClient,
-    MAX_NFT_URI_BYTES, METADATA_SCHEMA_VERSION,
+    MAX_HUNT_TITLE_BYTES, MAX_NFT_URI_BYTES, MAX_TITLE_BYTES, METADATA_SCHEMA_VERSION,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
