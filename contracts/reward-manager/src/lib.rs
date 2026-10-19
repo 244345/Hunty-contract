@@ -2057,26 +2057,13 @@ impl RewardManager {
         }
     }
 
-    /// Legacy entrypoint retained for existing integrations. New contract
-    /// integrations should use `distribute_rewards_authorized`, which carries
-    /// and authenticates the calling contract explicitly.
+    /// Distributes rewards to a player for a completed hunt.
     ///
-    /// Authorization is fail-closed: the caller must be an authorized
-    /// distributor (see `add_authorized_contract`). Unauthorized callers
-    /// receive `Unauthorized`.
+    /// The `caller` contract must authenticate explicitly and be an
+    /// authorized distributor (see `add_authorized_contract`).
+    /// Authorization is fail-closed: unauthorized callers receive
+    /// `Unauthorized`.
     pub fn distribute_rewards(
-        env: Env,
-        caller: Address,
-        hunt_id: u64,
-        player_address: Address,
-        reward_config: RewardConfig,
-    ) -> Result<(), RewardErrorCode> {
-        Self::require_authorized_distributor(&env, &caller)?;
-        Self::distribute_rewards_impl(env, hunt_id, player_address, reward_config)
-    }
-
-    /// Distribution entrypoint for an explicitly authenticated caller contract.
-    pub fn distribute_rewards_authorized(
         env: Env,
         caller: Address,
         hunt_id: u64,
@@ -4045,9 +4032,16 @@ impl RewardManager {
         Storage::get_emergency_logs(&env)
     }
 
-    /// Returns the on-chain version stored during initialize, or the compiled constant.
-    pub fn contract_version(env: Env) -> u32 {
-        Storage::get_contract_version(&env).unwrap_or(Self::CONTRACT_VERSION)
+    /// Returns the compiled `CONTRACT_VERSION` of this WASM build.
+    /// The constructor-time value is kept only as `deployed_version`
+    /// for provenance and must not be used for compatibility checks.
+    pub fn contract_version(_env: Env) -> u32 {
+        Self::CONTRACT_VERSION
+    }
+
+    /// Returns the version stored at deploy/initialize time, if any.
+    pub fn deployed_version(env: Env) -> Option<u32> {
+        Storage::get_contract_version(&env)
     }
 
     /// Returns true if the given NftReward contract meets the minimum required version.
