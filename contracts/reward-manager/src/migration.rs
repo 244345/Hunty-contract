@@ -169,7 +169,7 @@ impl RewardManagerMigration {
     ) -> Result<MigrationReport, UpgradeAuthError> {
         UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
         let previous =
-            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoProposal)?;
+            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoRollbackPoint)?;
         let current = MigrationFramework::detect_version(env);
         MigrationFramework::set_version(env, previous);
         MigrationFramework::clear_rollback(env);

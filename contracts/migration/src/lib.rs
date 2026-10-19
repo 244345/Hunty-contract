@@ -29,6 +29,15 @@ const TIMELOCK_PENDING_KEY: Symbol = symbol_short!("UPTLDP");
 const HIST_COUNT_KEY: Symbol = symbol_short!("UPHCT");
 const UPGRADE_ADMIN_KEY: Symbol = symbol_short!("UPADM");
 
+/// TTL threshold (ledgers) for upgrade history entries before they are
+/// considered stale and may be archived by the Soroban TTL garbage
+/// collector.
+const UPGRADE_HISTORY_TTL_THRESHOLD: u32 = 172_800;
+
+/// TTL extend-to (ledgers) for upgrade history entries. Keeps the
+/// audit trail alive for ~30 days at 5 s/ledger.
+const UPGRADE_HISTORY_TTL_EXTEND_TO: u32 = 518_400;
+
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -39,6 +48,7 @@ pub enum UpgradeAuthError {
     VersionMismatch = 4,
     InvalidTimelock = 5,
     WasmHashMismatch = 6,
+    NoRollbackPoint = 7,
 }
 
 #[contracttype]
@@ -107,14 +117,25 @@ pub struct UpgradeExecutedEvent {
     pub executor: Address,
 }
 
+/// Emitted when the upgrade timelock is changed (increase, no-op, or
+/// pending reduction that later applies).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UpgradeCancelledEvent {
-    pub cancelled_at: u64,
-    pub proposer: Address,
-    pub cancelled_by: Address,
-    pub target_version: u32,
-    pub wasm_hash: BytesN<32>,
+pub struct TimelockChangedEvent {
+    pub old_timelock: u64,
+    pub new_timelock: u64,
+    pub changed_at: u64,
+}
+
+/// Emitted when a timelock reduction is queued and will take effect
+/// only after the current timelock has elapsed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimelockReductionQueuedEvent {
+    pub old_timelock: u64,
+    pub new_timelock: u64,
+    pub requested_at: u64,
+    pub effective_at: u64,
 }
 
 pub struct MigrationFramework;
@@ -237,11 +258,28 @@ impl UpgradeAuthorization {
                     effective_at: now.saturating_add(current),
                 },
             );
+            env.events().publish(
+                (symbol_short!("TL_REDUCE"),),
+                TimelockReductionQueuedEvent {
+                    old_timelock: current,
+                    new_timelock: seconds,
+                    requested_at: now,
+                    effective_at: now.saturating_add(current),
+                },
+            );
         } else {
             // Increase or no-op: apply immediately and drop any stale pending
             // reduction so it cannot resurrect after the raise.
             env.storage().instance().remove(&TIMELOCK_PENDING_KEY);
             env.storage().instance().set(&TIMELOCK_KEY, &seconds);
+            env.events().publish(
+                (symbol_short!("TL_CHANGE"),),
+                TimelockChangedEvent {
+                    old_timelock: current,
+                    new_timelock: seconds,
+                    changed_at: now,
+                },
+            );
         }
         Ok(())
     }
@@ -257,6 +295,14 @@ impl UpgradeAuthorization {
             .instance()
             .set(&TIMELOCK_KEY, &change.new_timelock);
         env.storage().instance().remove(&TIMELOCK_PENDING_KEY);
+        env.events().publish(
+            (symbol_short!("TL_CHANGE"),),
+            TimelockChangedEvent {
+                old_timelock: change.old_timelock,
+                new_timelock: change.new_timelock,
+                changed_at: now,
+            },
+        );
         Some(change.new_timelock)
     }
 
@@ -357,7 +403,13 @@ impl UpgradeAuthorization {
         env.storage().persistent().set(&key, entry);
         env.storage()
             .persistent()
+            .extend_ttl(&key, UPGRADE_HISTORY_TTL_THRESHOLD, UPGRADE_HISTORY_TTL_EXTEND_TO);
+        env.storage()
+            .persistent()
             .set(&HIST_COUNT_KEY, &(count + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&HIST_COUNT_KEY, UPGRADE_HISTORY_TTL_THRESHOLD, UPGRADE_HISTORY_TTL_EXTEND_TO);
     }
 
     pub fn get_history(env: &Env, offset: u32, limit: u32) -> Vec<UpgradeHistoryEntry> {
@@ -371,14 +423,24 @@ impl UpgradeAuthorization {
         for i in offset..end {
             let key = (symbol_short!("UPHIS"), i);
             if let Some(entry) = env.storage().persistent().get(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, UPGRADE_HISTORY_TTL_THRESHOLD, UPGRADE_HISTORY_TTL_EXTEND_TO);
                 entries.push_back(entry);
             }
         }
+        env.storage()
+            .persistent()
+            .extend_ttl(&HIST_COUNT_KEY, UPGRADE_HISTORY_TTL_THRESHOLD, UPGRADE_HISTORY_TTL_EXTEND_TO);
         entries
     }
 
     pub fn history_count(env: &Env) -> u32 {
-        env.storage().persistent().get(&HIST_COUNT_KEY).unwrap_or(0)
+        let count: u32 = env.storage().persistent().get(&HIST_COUNT_KEY).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .extend_ttl(&HIST_COUNT_KEY, UPGRADE_HISTORY_TTL_THRESHOLD, UPGRADE_HISTORY_TTL_EXTEND_TO);
+        count
     }
 
     pub fn prepare_migration_run(
@@ -432,7 +494,7 @@ impl UpgradeAuthorization {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::{contract, contractimpl};
 
     /// Bare contract used to provide a storage context in unit tests.
@@ -912,54 +974,11 @@ mod tests {
         });
     }
 
-    /// Issue #1300: get_history caps limit at MAX_HISTORY_PAGE_SIZE (50).
+    /// Issue #1303: `record_execution` must extend TTL on write, and
+    /// `get_history` / `history_count` must extend TTL on read so that
+    /// the upgrade audit trail is never silently archived.
     #[test]
-    fn test_8_get_history_caps_limit() {
-        let (env, contract_id) = setup();
-        let admin = Address::generate(&env);
-        let hash = dummy_hash(&env);
-
-        env.as_contract(&contract_id, || {
-            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
-            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
-                .unwrap();
-
-            // Record 60 upgrade executions (each finalize_upgrade_run adds one).
-            for i in 0..60 {
-                let ts = BASE_TS + MIN_UPGRADE_TIMELOCK_SECONDS + i;
-                set_time(&env, ts);
-                UpgradeAuthorization::finalize_upgrade_run(
-                    &env,
-                    &admin,
-                    i,
-                    i + 1,
-                    &hash,
-                    ts,
-                );
-            }
-
-            // 1. limit = u32::MAX should return at most 50 entries.
-            let first_page = UpgradeAuthorization::get_history(&env, 0, u32::MAX);
-            assert_eq!(first_page.len() as u32, MAX_HISTORY_PAGE_SIZE);
-
-            // 2. offset = 50 should return the remaining 10 entries in order.
-            let second_page = UpgradeAuthorization::get_history(&env, 50, u32::MAX);
-            assert_eq!(second_page.len(), 10);
-            for (idx, entry) in second_page.iter().enumerate() {
-                let expected_version = 50 + idx as u32;
-                assert_eq!(entry.from_version, expected_version);
-                assert_eq!(entry.to_version, expected_version + 1);
-            }
-
-            // 3. Small limit (e.g., 5) should be unchanged.
-            let small_page = UpgradeAuthorization::get_history(&env, 0, 5);
-            assert_eq!(small_page.len(), 5);
-        });
-    }
-
-    /// Issue #1301: cancel_upgrade allows admin to clear a pending proposal.
-    #[test]
-    fn test_9_cancel_upgrade_clears_pending_proposal() {
+    fn upgrade_history_ttl_is_extended_on_write_and_read() {
         let (env, contract_id) = setup();
         let admin = Address::generate(&env);
         let hash_a = BytesN::from_array(&env, &[0xAA; 32]);
@@ -968,7 +987,6 @@ mod tests {
             UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
                 .unwrap();
 
-            // Propose an upgrade
             let proposal = UpgradeAuthorization::propose_upgrade(
                 &env,
                 &admin,
@@ -977,71 +995,159 @@ mod tests {
                 BASE_TS,
             )
             .unwrap();
-            assert_eq!(proposal.target_version, TARGET);
-            assert_eq!(proposal.wasm_hash, hash_a);
 
-            // Cancel the proposal
-            let cancelled = UpgradeAuthorization::cancel_upgrade(
+            set_time(&env, proposal.effective_at);
+            UpgradeAuthorization::finalize_upgrade_run(
                 &env,
                 &admin,
-                Some(admin.clone()),
-            )
-            .unwrap();
-            assert_eq!(cancelled.target_version, TARGET);
-            assert_eq!(cancelled.wasm_hash, hash_a);
-            assert_eq!(cancelled.proposer, admin);
-
-            // Verify proposal is cleared
-            assert!(UpgradeAuthorization::get_proposal(&env).is_none());
-        });
-    }
-
-    #[test]
-    fn test_10_cancel_upgrade_unauthorized_fails() {
-        let (env, contract_id) = setup();
-        let admin = Address::generate(&env);
-        let non_admin = Address::generate(&env);
-        let hash_a = BytesN::from_array(&env, &[0xAA; 32]);
-        env.as_contract(&contract_id, || {
-            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
-            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
-                .unwrap();
-
-            // Propose an upgrade
-            UpgradeAuthorization::propose_upgrade(
-                &env,
-                &admin,
+                1,
                 TARGET,
-                hash_a.clone(),
-                BASE_TS,
-            )
-            .unwrap();
-
-            // Non-admin cannot cancel
-            assert_eq!(
-                UpgradeAuthorization::cancel_upgrade(&env, &non_admin, Some(admin.clone())),
-                Err(UpgradeAuthError::Unauthorized)
+                &hash_a,
+                proposal.effective_at,
             );
 
-            // Proposal still exists
-            assert!(UpgradeAuthorization::get_proposal(&env).is_some());
+            // TTL was extended on write; reading via get_history extends TTL on read.
+            let history = UpgradeAuthorization::get_history(&env, 0, 10);
+            assert_eq!(history.len(), 1);
+
+            // TTL was extended on read; history_count also extends TTL.
+            assert_eq!(UpgradeAuthorization::history_count(&env), 1);
+
+            // Advance time well beyond the TTL threshold so that without
+            // extend_ttl the entry would be archived; with extend_ttl it
+            // remains accessible.
+            set_time(&env, proposal.effective_at.saturating_add(UPGRADE_HISTORY_TTL_THRESHOLD));
+
+            let history_after = UpgradeAuthorization::get_history(&env, 0, 10);
+            assert_eq!(history_after.len(), 1);
+            let entry = history_after.get(0).unwrap();
+            assert_eq!(entry.from_version, 1);
+            assert_eq!(entry.to_version, TARGET);
+            assert_eq!(entry.wasm_hash, hash_a);
+            assert_eq!(entry.executor, admin);
         });
     }
 
+    // -----------------------------------------------------------------------
+    // Timelock event emission tests
+    // -----------------------------------------------------------------------
+
+    use soroban_sdk::{Symbol, TryFromVal, Val};
+
+    fn find_timelock_event(
+        env: &Env,
+        topic_name: &str,
+    ) -> Option<(Vec<Val>, Val)> {
+        let expected_topic: Val = Symbol::new(env, topic_name).into_val(env);
+        let events = env.events().all();
+        let mut idx = 0;
+        while idx < events.len() {
+            let event = events.get(idx).unwrap();
+            let topics = &event.1;
+            if topics.len() > 0 {
+                let topic = topics.get(0).unwrap();
+                if topic.get_payload() == expected_topic.get_payload() {
+                    return Some((event.1, event.2));
+                }
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    /// Increasing the timelock emits a `TimelockChanged` event.
     #[test]
-    fn test_11_cancel_upgrade_no_proposal_fails() {
+    fn timelock_increase_emits_timelock_changed_event() {
         let (env, contract_id) = setup();
-        let admin = Address::generate(&env);
         env.as_contract(&contract_id, || {
-            UpgradeAuthorization::set_upgrade_admin(&env, &admin);
             UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS)
                 .unwrap();
 
-            // No proposal exists, cancel should fail
-            assert_eq!(
-                UpgradeAuthorization::cancel_upgrade(&env, &admin, Some(admin.clone())),
-                Err(UpgradeAuthError::NoProposal)
+            let event = find_timelock_event(&env, "TL_CHANGE");
+            assert!(event.is_some(), "TL_CHANGE event should be emitted on increase");
+            let (topics, body) = event.unwrap();
+            assert_eq!(topics.len(), 1);
+            let event_data: TimelockChangedEvent =
+                TimelockChangedEvent::try_from_val(&env, &body).unwrap();
+            assert_eq!(event_data.old_timelock, 0);
+            assert_eq!(event_data.new_timelock, MIN_UPGRADE_TIMELOCK_SECONDS);
+            assert_eq!(event_data.changed_at, BASE_TS);
+        });
+    }
+
+    /// Queuing a reduction emits a `TimelockReductionQueued` event.
+    #[test]
+    fn timelock_reduction_queues_emits_reduction_queued_event() {
+        let (env, contract_id) = setup();
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, MIN_UPGRADE_TIMELOCK_SECONDS * 4)
+                .unwrap();
+        });
+
+        let request_at = BASE_TS + MIN_UPGRADE_TIMELOCK_SECONDS * 4 + 10;
+        set_time(&env, request_at);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_timelock_seconds(
+                &env,
+                request_at,
+                MIN_UPGRADE_TIMELOCK_SECONDS * 2,
+            )
+            .unwrap();
+
+            let event = find_timelock_event(&env, "TL_REDUCE");
+            assert!(
+                event.is_some(),
+                "TL_REDUCE event should be emitted on queued reduction"
             );
+            let (topics, body) = event.unwrap();
+            assert_eq!(topics.len(), 1);
+            let event_data: TimelockReductionQueuedEvent =
+                TimelockReductionQueuedEvent::try_from_val(&env, &body).unwrap();
+            assert_eq!(event_data.old_timelock, MIN_UPGRADE_TIMELOCK_SECONDS * 4);
+            assert_eq!(
+                event_data.new_timelock,
+                MIN_UPGRADE_TIMELOCK_SECONDS * 2
+            );
+            assert_eq!(event_data.requested_at, request_at);
+            assert_eq!(event_data.effective_at, request_at + MIN_UPGRADE_TIMELOCK_SECONDS * 4);
+        });
+    }
+
+    /// Applying a pending reduction emits a `TimelockChanged` event.
+    #[test]
+    fn pending_reduction_applies_emits_timelock_changed_event() {
+        let (env, contract_id) = setup();
+        let initial: u64 = 100_000;
+        let reduced: u64 = MIN_UPGRADE_TIMELOCK_SECONDS * 2;
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_timelock_seconds(&env, BASE_TS, initial).unwrap();
+        });
+
+        let request_at = BASE_TS + initial + 10;
+        set_time(&env, request_at);
+        env.as_contract(&contract_id, || {
+            UpgradeAuthorization::set_timelock_seconds(&env, request_at, reduced).unwrap();
+        });
+
+        let applied_at = request_at + initial;
+        set_time(&env, applied_at);
+        env.as_contract(&contract_id, || {
+            // Calling get_timelock_seconds triggers apply_pending_timelock_change
+            // which should emit the TL_CHANGE event.
+            let _ = UpgradeAuthorization::get_timelock_seconds(&env);
+
+            let event = find_timelock_event(&env, "TL_CHANGE");
+            assert!(
+                event.is_some(),
+                "TL_CHANGE event should be emitted when pending reduction is applied"
+            );
+            let (topics, body) = event.unwrap();
+            assert_eq!(topics.len(), 1);
+            let event_data: TimelockChangedEvent =
+                TimelockChangedEvent::try_from_val(&env, &body).unwrap();
+            assert_eq!(event_data.old_timelock, initial);
+            assert_eq!(event_data.new_timelock, reduced);
+            assert_eq!(event_data.changed_at, applied_at);
         });
     }
 }

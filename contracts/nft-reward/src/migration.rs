@@ -55,7 +55,25 @@ impl NftRewardMigration {
         let from_version = MigrationFramework::detect_version(env);
         let to_version = proposal.target_version;
 
-        MigrationFramework::set_version(env, to_version);
+        // Run pending data-migration steps before swapping WASM so that
+        // the stored data matches the layout expected by the new code.
+        if from_version < to_version {
+            MigrationFramework::save_rollback_point(env, from_version);
+            let mut current = from_version;
+            while current < to_version {
+                match current {
+                    0 => {
+                        Self::migrate_v0_to_v1(env);
+                        current = 1;
+                    }
+                    _ => {
+                        return Err(UpgradeAuthError::VersionMismatch);
+                    }
+                }
+            }
+            MigrationFramework::set_version(env, current);
+        }
+
         UpgradeAuthorization::finalize_upgrade_run(
             env,
             admin,
@@ -210,7 +228,7 @@ impl NftRewardMigration {
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
         let previous =
-            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoProposal)?;
+            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoRollbackPoint)?;
         let current = MigrationFramework::detect_version(env);
         MigrationFramework::set_version(env, previous);
         MigrationFramework::clear_rollback(env);

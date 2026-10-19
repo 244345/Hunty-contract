@@ -59,7 +59,9 @@ export const UpgradeAuthError = {
   2: {message:"NoProposal"},
   3: {message:"TimelockPending"},
   4: {message:"VersionMismatch"},
-  5: {message:"InvalidTimelock"}
+  5: {message:"InvalidTimelock"},
+  6: {message:"WasmHashMismatch"},
+  7: {message:"NoRollbackPoint"}
 }
 
 
