@@ -4346,6 +4346,25 @@ impl HuntyCore {
         Ok(())
     }
 
+    /// Cancels a pending admin proposal.
+    ///
+    /// Clears any pending admin address set by `propose_new_admin`, ensuring that
+    /// the previously proposed address can no longer call `accept_admin`.
+    /// Caller must be the current admin.
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), HuntErrorCode> {
+        Self::require_admin(&env, &admin)?;
+
+        let pending = Storage::get_pending_admin(&env).ok_or(HuntErrorCode::NoPendingAdmin)?;
+        Storage::clear_pending_admin(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "ADMIN"), Symbol::new(&env, "ADM_CNCL")),
+            (admin, pending),
+        );
+
+        Ok(())
+    }
+
     pub fn add_global_view_only(
         env: Env,
         admin: Address,
