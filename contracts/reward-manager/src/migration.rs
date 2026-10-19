@@ -1,9 +1,10 @@
 use crate::storage::Storage;
 use hunty_migration::{
-    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
-    UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent, CURRENT_SCHEMA_VERSION,
+    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeCancelledEvent,
+    UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
+    CURRENT_SCHEMA_VERSION,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, Symbol};
 
 pub use hunty_migration::MigrationReport;
 
@@ -26,25 +27,61 @@ impl RewardManagerMigration {
         env: &Env,
         admin: &Address,
         target_version: u32,
+        wasm_hash: BytesN<32>,
     ) -> Result<UpgradeProposal, UpgradeAuthError> {
         UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
         let now = env.ledger().timestamp();
-        Ok(UpgradeAuthorization::propose_upgrade(
-            env,
-            admin,
-            target_version,
-            now,
-        ))
+        UpgradeAuthorization::propose_upgrade(env, admin, target_version, wasm_hash, now)
     }
 
+    pub fn upgrade(
+        env: &Env,
+        admin: &Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::validate_upgrade(env, &new_wasm_hash, now)?;
+        let from_version = MigrationFramework::detect_version(env);
+        let to_version = proposal.target_version;
+
+        MigrationFramework::set_version(env, to_version);
+        UpgradeAuthorization::finalize_upgrade_run(
+            env,
+            admin,
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+        );
+
+        let event = Self::upgrade_executed_event(
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+            admin.clone(),
+        );
+        env.events()
+            .publish(Self::upgrade_executed_topic(env), event);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    /// Sets the upgrade timelock to `delay_seconds`.
+    ///
+    /// Rejects values below `MIN_UPGRADE_TIMELOCK_SECONDS` (24 hours). Timelock
+    /// reductions only take effect after the current timelock elapses, so users
+    /// keep the warning window they were promised.
     pub fn set_upgrade_timelock(
         env: &Env,
         admin: &Address,
         delay_seconds: u64,
     ) -> Result<(), UpgradeAuthError> {
         UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
-        UpgradeAuthorization::set_timelock_seconds(env, delay_seconds);
-        Ok(())
+        let now = env.ledger().timestamp();
+        UpgradeAuthorization::set_timelock_seconds(env, now, delay_seconds)
     }
 
     pub fn get_upgrade_proposal(env: &Env) -> Option<UpgradeProposal> {
@@ -53,6 +90,12 @@ impl RewardManagerMigration {
 
     pub fn get_upgrade_timelock(env: &Env) -> u64 {
         UpgradeAuthorization::get_timelock_seconds(env)
+    }
+
+    /// Returns the pending timelock reduction, if one is queued.
+    #[allow(dead_code)]
+    pub fn get_pending_timelock_change(env: &Env) -> Option<hunty_migration::TimelockChange> {
+        UpgradeAuthorization::get_pending_timelock_change(env)
     }
 
     pub fn get_upgrade_history(
@@ -70,6 +113,13 @@ impl RewardManagerMigration {
         dry_run: bool,
     ) -> Result<MigrationReport, UpgradeAuthError> {
         let now = env.ledger().timestamp();
+
+        // Reject target_version above the current schema version, as we have no
+        // implementation to reach a future version.
+        if target_version > CURRENT_SCHEMA_VERSION {
+            return Err(UpgradeAuthError::VersionMismatch);
+        }
+
         UpgradeAuthorization::prepare_migration_run(
             env,
             admin,
@@ -93,20 +143,20 @@ impl RewardManagerMigration {
         }
         if !dry_run {
             MigrationFramework::save_rollback_point(env, current);
-            MigrationFramework::set_version(env, CURRENT_SCHEMA_VERSION);
-            UpgradeAuthorization::finalize_migration_run(
-                env,
-                admin,
-                current,
-                CURRENT_SCHEMA_VERSION,
-                now,
-            );
+            // CRITICAL: Write the target_version, not CURRENT_SCHEMA_VERSION.
+            // The caller explicitly requested a migration to target_version;
+            // jumping to CURRENT_SCHEMA_VERSION skips intermediate migration steps
+            // and contradicts the reported to_version in the event.
+            MigrationFramework::set_version(env, target_version);
+            UpgradeAuthorization::finalize_migration_run(env, admin, current, target_version, now);
         }
+        // Report the actual version we wrote, not the target_version parameter.
+        let written_version = if dry_run { current } else { target_version };
         Ok(MigrationFramework::build_report(
             env,
             current,
-            target_version,
-            1,
+            written_version,
+            if current < target_version { 1 } else { 0 },
             dry_run,
             true,
             "reward-manager migration complete",
@@ -119,7 +169,7 @@ impl RewardManagerMigration {
     ) -> Result<MigrationReport, UpgradeAuthError> {
         UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
         let previous =
-            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoProposal)?;
+            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoRollbackPoint)?;
         let current = MigrationFramework::detect_version(env);
         MigrationFramework::set_version(env, previous);
         MigrationFramework::clear_rollback(env);
@@ -137,6 +187,7 @@ impl RewardManagerMigration {
     pub fn upgrade_proposed_event(proposal: &UpgradeProposal) -> UpgradeProposedEvent {
         UpgradeProposedEvent {
             target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
             proposed_at: proposal.proposed_at,
             effective_at: proposal.effective_at,
             proposer: proposal.proposer.clone(),
@@ -146,12 +197,14 @@ impl RewardManagerMigration {
     pub fn upgrade_executed_event(
         from_version: u32,
         to_version: u32,
+        wasm_hash: &BytesN<32>,
         executed_at: u64,
         executor: Address,
     ) -> UpgradeExecutedEvent {
         UpgradeExecutedEvent {
             from_version,
             to_version,
+            wasm_hash: wasm_hash.clone(),
             executed_at,
             executor,
         }
@@ -163,5 +216,37 @@ impl RewardManagerMigration {
 
     pub fn upgrade_executed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeExecuted"),)
+    }
+
+    pub fn upgrade_cancelled_topic(env: &Env) -> (Symbol,) {
+        (Symbol::new(env, "UpgradeCancelled"),)
+    }
+
+    pub fn upgrade_cancelled_event(
+        proposal: &UpgradeProposal,
+        cancelled_by: Address,
+        cancelled_at: u64,
+    ) -> UpgradeCancelledEvent {
+        UpgradeCancelledEvent {
+            cancelled_at,
+            proposer: proposal.proposer.clone(),
+            cancelled_by,
+            target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
+        }
+    }
+
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::cancel_upgrade(env, admin, Self::configured_admin(env))?;
+        env.events().publish(
+            Self::upgrade_cancelled_topic(env),
+            Self::upgrade_cancelled_event(&proposal, admin.clone(), now),
+        );
+        Ok(proposal)
     }
 }

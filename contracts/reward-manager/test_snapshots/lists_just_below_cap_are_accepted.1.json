@@ -1,0 +1,1300 @@
+{
+  "generators": {
+    "address": 6,
+    "nonce": 0,
+    "mux_id": 0
+  },
+  "auth": [
+    [],
+    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "function_name": "",
+              "args": []
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "function_name": "",
+              "args": []
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    []
+  ],
+  "ledger": {
+    "protocol_version": 28,
+    "sequence_number": 0,
+    "timestamp": 0,
+    "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "base_reserve": 0,
+    "min_persistent_entry_ttl": 4096,
+    "min_temp_entry_ttl": 16,
+    "max_entry_ttl": 6312000,
+    "ledger_entries": [
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "symbol": "ADMI"
+              },
+              "durability": "persistent",
+              "val": {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "symbol": "HCORE"
+              },
+              "durability": "persistent",
+              "val": {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "symbol": "X"
+              },
+              "durability": "persistent",
+              "val": {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "AUDC"
+                  },
+                  {
+                    "u64": "70"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "u64": "2"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "AUDL"
+                  },
+                  {
+                    "u64": "70"
+                  },
+                  {
+                    "u64": "0"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "actor"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "amount"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "operation"
+                    },
+                    "val": {
+                      "u32": 16
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "timestamp"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "AUDL"
+                  },
+                  {
+                    "u64": "70"
+                  },
+                  {
+                    "u64": "1"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "actor"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "amount"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "operation"
+                    },
+                    "val": {
+                      "u32": 17
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "timestamp"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "AUTH"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PCFG"
+                  },
+                  {
+                    "u64": "70"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "claim_deadline"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "creator"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "delegates"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "distribution_mode"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "frozen"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "frozen_by"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "min_distribution_amount"
+                    },
+                    "val": {
+                      "i128": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "min_distribution_interval_secs"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "nft_contract"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "nft_royalty_bps"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "nft_transferable"
+                    },
+                    "val": {
+                      "bool": true
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "rank_based_tiers"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 1
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 2
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 3
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 4
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 5
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 6
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 7
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 8
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 9
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 10
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 11
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 12
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 13
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 14
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 15
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 16
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 17
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 18
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "rank"
+                              },
+                              "val": {
+                                "u32": 19
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "target_amount"
+                    },
+                    "val": {
+                      "i128": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "time_based_tiers"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "60"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "120"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "180"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "240"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "300"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "360"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "420"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "480"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "540"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "600"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "660"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "720"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "780"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "840"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "900"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "960"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "1020"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "1080"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "max_completion_secs"
+                              },
+                              "val": {
+                                "u64": "1140"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "xlm_amount"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "token_address"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "vesting_period_secs"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": "ledger_key_contract_instance",
+              "durability": "persistent",
+              "val": {
+                "contract_instance": {
+                  "executable": {
+                    "wasm": "0d6d61ed9340595cb73d424cebeddb6def971a72143eafd77ef9806c3724701a"
+                  },
+                  "storage": [
+                    {
+                      "key": {
+                        "symbol": "CVER"
+                      },
+                      "val": {
+                        "u32": 2
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "HAUTH"
+                      },
+                      "val": {
+                        "bool": true
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "801925984706572462"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "5541220902715666415"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_code": {
+              "ext": "v0",
+              "hash": "0d6d61ed9340595cb73d424cebeddb6def971a72143eafd77ef9806c3724701a",
+              "code": "746573745f636f6e74726163745f666f725f636f6e74726163745f69645f4341414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414149544134"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      }
+    ]
+  },
+  "events": []
+}

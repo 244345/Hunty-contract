@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban::{address, Env, Symbol, Vec};
 use common::audit::*;
 use common::audit_emitter::emit_audit_event;
 
@@ -30,6 +30,34 @@ pub fn remove_admin(env: &Env, current_admin: &Address, admin_to_remove: &Addres
     details.push_back((symbol_short!("removed_by"), current_admin.to_string()));
 
     emit_audit_event(env, current_admin, ACTION_ADMIN_REMOVED, CONTRACT_NAME, details);
+}
+
+/// Add minter
+pub fn add_minter(env: &Env, admin: &Address, minter: &Address) {
+    admin.require_auth();
+    assert!(is_admin(env, admin), "Unauthorized");
+
+    add_minter_address(env, minter);
+
+    let mut details = Vec::new(env);
+    details.push_back((symbol_short!("added_minter"), minter.to_string()));
+    details.push_back((symbol_short!("added_by"), admin.to_string()));
+
+    emit_audit_event(env, admin, ACTION_ADMIN_ADDED, CONTRACT_NAME, details);
+}
+
+/// Remove minter
+pub fn remove_minter(env: &Env, admin: &Address, minter: &Address) {
+    admin.require_auth();
+    assert!(is_admin(env, admin), "Unauthorized");
+
+    remove_minter_address(env, minter);
+
+    let mut details = Vec::new(env);
+    details.push_back((symbol_short!("removed_minter"), minter.to_string()));
+    details.push_back((symbol_short!("removed_by"), admin.to_string()));
+
+    emit_audit_event(env, admin, ACTION_ADMIN_REMOVED, CONTRACT_NAME, details);
 }
 
 /// Pause NFT minting
