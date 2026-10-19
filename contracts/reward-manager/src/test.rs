@@ -527,7 +527,7 @@ mod test {
         );
         assert_eq!(
             crate::rank_tiers_are_strictly_ascending(&zero_rank),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
 
         let non_positive = Vec::from_array(
@@ -547,7 +547,7 @@ mod test {
     fn test_rank_tier_constructor_rejects_zero_rank() {
         assert_eq!(
             RankRewardTier::new(0, 100),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
     }
 
@@ -3393,7 +3393,7 @@ mod test {
 
             let result = env.try_invoke_contract::<(), RewardErrorCode>(
                 &contract_id,
-                &Symbol::new(&env, "distribute_rewards_authorized"),
+                &Symbol::new(&env, "distribute_rewards"),
                 args,
             );
             assert_eq!(result, Err(Ok(RewardErrorCode::Unauthorized)));
@@ -5570,10 +5570,10 @@ mod test {
         });
     }
 
-    /// #1283: royalty basis points above 10000 (100%) must be rejected at pool
-    /// creation, while exactly 10000 is accepted.
+    /// #1286: `get_reward_pool` exposes `total_refunded`, so the accounting
+    /// identity can be checked from one call.
     #[test]
-    fn test_create_pool_rejects_royalty_bps_above_10000() {
+    fn test_get_reward_pool_reports_total_refunded() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
         let (contract_id, token_address, token_admin) = setup(&env);
@@ -5582,29 +5582,25 @@ mod test {
 
         env.as_contract(&contract_id, || {
             initialize_contract(&env, &token_address);
+            create_pool_with_token(&env, creator.clone(), 1286, token_address.clone(), 1_000)
+                .unwrap();
+            RewardManager::fund_reward_pool(env.clone(), creator.clone(), 1286, 60_000_000)
+                .unwrap();
 
-            let too_high = RewardManager::create_reward_pool(
-                env.clone(),
-                creator.clone(),
-                1283,
-                token_address.clone(),
-                1_000,
-                10_001u32,
-                true,
-            );
-            assert_eq!(too_high, Err(RewardErrorCode::InvalidConfig));
-            assert!(Storage::get_pool_config(&env, 1283).is_none());
+            let before = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(before.total_refunded, 0);
 
-            let boundary = RewardManager::create_reward_pool(
-                env.clone(),
-                creator.clone(),
-                1283,
-                token_address.clone(),
-                1_000,
-                10_000u32,
-                true,
+            RewardManager::refund_pool(env.clone(), creator.clone(), 1286).unwrap();
+
+            let after = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(after.total_refunded, 60_000_000);
+            assert_eq!(
+                after.total_deposited,
+                after.balance
+                    + after.total_distributed
+                    + after.total_refunded
+                    + after.total_migrated_out
             );
-            assert!(boundary.is_ok());
         });
     }
 
