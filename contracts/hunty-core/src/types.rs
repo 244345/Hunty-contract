@@ -162,6 +162,10 @@ pub struct BatchClueInput {
     /// Difficulty tier (1-5, 1 = easiest, 5 = hardest).
     /// Difficulty multiplies the clue's points: points earned = points * difficulty.
     pub difficulty: u32,
+    /// Optional weight multiplier, matching the `weight` argument of
+    /// `add_clue`. `None` defaults to 1; `Some(0)` is rejected with
+    /// `InvalidWeight`.
+    pub weight: Option<u32>,
 }
 
 /// Clue info returned by get_clue/list_clues. Excludes answer hash.
@@ -536,6 +540,21 @@ impl RewardConfig {
             self.xlm_pool / (self.max_winners as i128)
         }
     }
+}
+
+/// Bounds a live-pool per-winner share so earlier winners are never
+/// shortchanged: never below the activation snapshot share, and never
+/// above the total remaining balance.
+pub fn bounded_flat_amount(
+    snapshot_per_winner: i128,
+    live_balance: i128,
+    remaining_winners: u32,
+) -> i128 {
+    if remaining_winners == 0 || live_balance <= 0 {
+        return snapshot_per_winner;
+    }
+    let live_share = live_balance / (remaining_winners as i128);
+    snapshot_per_winner.max(live_share).min(live_balance)
 }
 
 // Events

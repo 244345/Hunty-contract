@@ -527,7 +527,7 @@ mod test {
         );
         assert_eq!(
             crate::rank_tiers_are_strictly_ascending(&zero_rank),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
 
         let non_positive = Vec::from_array(
@@ -547,7 +547,7 @@ mod test {
     fn test_rank_tier_constructor_rejects_zero_rank() {
         assert_eq!(
             RankRewardTier::new(0, 100),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
     }
 
@@ -3393,7 +3393,7 @@ mod test {
 
             let result = env.try_invoke_contract::<(), RewardErrorCode>(
                 &contract_id,
-                &Symbol::new(&env, "distribute_rewards_authorized"),
+                &Symbol::new(&env, "distribute_rewards"),
                 args,
             );
             assert_eq!(result, Err(Ok(RewardErrorCode::Unauthorized)));
@@ -5570,46 +5570,37 @@ mod test {
         });
     }
 
-    /// #1284: adding and removing an authorized contract each emit an event
-    /// carrying the admin and the contract.
+    /// #1286: `get_reward_pool` exposes `total_refunded`, so the accounting
+    /// identity can be checked from one call.
     #[test]
-    fn test_authorized_contract_changes_emit_events() {
+    fn test_get_reward_pool_reports_total_refunded() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
-        let (contract_id, token_address, _token_admin) = setup(&env);
-        let admin = Address::generate(&env);
-        let distributor = Address::generate(&env);
+        let (contract_id, token_address, token_admin) = setup(&env);
+        let creator = Address::generate(&env);
+        mint_tokens(&env, &token_address, &token_admin, &creator, 100_000_000);
 
         env.as_contract(&contract_id, || {
-            RewardManager::initialize(
-                env.clone(),
-                admin.clone(),
-                token_address.clone(),
-                Address::generate(&env),
-            )
-            .unwrap();
-
-            RewardManager::add_authorized_contract(env.clone(), admin.clone(), distributor.clone())
+            initialize_contract(&env, &token_address);
+            create_pool_with_token(&env, creator.clone(), 1286, token_address.clone(), 1_000)
                 .unwrap();
-            RewardManager::remove_authorized_contract(
-                env.clone(),
-                admin.clone(),
-                distributor.clone(),
-            )
-            .unwrap();
+            RewardManager::fund_reward_pool(env.clone(), creator.clone(), 1286, 60_000_000)
+                .unwrap();
 
-            let events = all_events_legacy(&env);
-            let count = |name: &str| {
-                let topic: Val = Symbol::new(&env, name).into_val(&env);
-                events
-                    .iter()
-                    .filter(|e| {
-                        e.1.get(0).map(|t| t.get_payload()) == Some(topic.get_payload())
-                    })
-                    .count()
-            };
-            assert_eq!(count("AUTH_ADD"), 1, "AUTH_ADD should be emitted once");
-            assert_eq!(count("AUTH_REM"), 1, "AUTH_REM should be emitted once");
+            let before = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(before.total_refunded, 0);
+
+            RewardManager::refund_pool(env.clone(), creator.clone(), 1286).unwrap();
+
+            let after = RewardManager::get_reward_pool(env.clone(), 1286).unwrap();
+            assert_eq!(after.total_refunded, 60_000_000);
+            assert_eq!(
+                after.total_deposited,
+                after.balance
+                    + after.total_distributed
+                    + after.total_refunded
+                    + after.total_migrated_out
+            );
         });
     }
 

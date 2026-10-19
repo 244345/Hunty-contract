@@ -1706,6 +1706,7 @@ mod test {
                         points: 10,
                         is_required: true,
                         difficulty: 1,
+                        weight: None,
                     },
                     BatchClueInput {
                         question: String::from_str(env, "Q2"),
@@ -1713,6 +1714,7 @@ mod test {
                         points: 20,
                         is_required: false,
                         difficulty: 3,
+                        weight: None,
                     },
                 ],
             );
@@ -1779,6 +1781,7 @@ mod test {
                         points: 1,
                         is_required: false,
                         difficulty: 1,
+                        weight: None,
                     },
                     BatchClueInput {
                         question: String::from_str(env, "Q101"),
@@ -1786,6 +1789,7 @@ mod test {
                         points: 1,
                         is_required: false,
                         difficulty: 1,
+                        weight: None,
                     },
                 ],
             );
@@ -1843,6 +1847,7 @@ mod test {
                     points: 1,
                     is_required: false,
                     difficulty: 1,
+                    weight: None,
                 }],
             );
 
@@ -12870,4 +12875,76 @@ fn bench_save_progress_500_players() {
     // Compare against a 1-player baseline so the test proves it is not O(n)
     // (or use a generous fixed ceiling, tuned after your first run)
     assert!(cpu < 5_000_000, "save_player_progress scales with player count: {}", cpu);
+}
+
+#[test]
+fn test_bounded_flat_amount_routes_top_ups_to_later_winners() {
+    use crate::types::bounded_flat_amount;
+    // No top-up: live share equals the activation snapshot.
+    assert_eq!(bounded_flat_amount(10, 100, 10), 10);
+    // Sponsor top-up after activation: live share exceeds the snapshot,
+    // so later winners receive more.
+    assert_eq!(bounded_flat_amount(10, 150, 10), 15);
+    // Partial claims plus top-up: bound uses remaining winners, so the
+    // extra tokens are not stranded.
+    assert_eq!(bounded_flat_amount(10, 100, 5), 20);
+    // Shrunken pool: never silently underpay below the snapshot; the
+    // claim fails closed downstream instead of shortchanging winners.
+    assert_eq!(bounded_flat_amount(10, 50, 10), 10);
+    // Never pay more than the remaining balance in total.
+    assert_eq!(bounded_flat_amount(0, 5, 10), 0);
+    // Degenerate inputs fall back to the snapshot.
+    assert_eq!(bounded_flat_amount(10, 0, 10), 10);
+    assert_eq!(bounded_flat_amount(10, 100, 0), 10);
+}
+#[test]
+fn test_making_hunt_public_clears_invite_code_hash() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let creator = Address::generate(&env);
+    let contract_id = env.register(HuntyCore, ());
+
+    let hunt_id = as_core_contract(&env, &contract_id, |env| {
+        HuntyCore::create_hunt(
+            env.clone(),
+            creator.clone(),
+            String::from_str(env, "Privacy Hunt"),
+            String::from_str(env, "Desc"),
+            None,
+            None,
+            0,
+            None,
+            None,
+        )
+        .unwrap()
+    });
+
+    // Private with a code, then made public: the stale hash must go.
+    as_core_contract(&env, &contract_id, |env| {
+        HuntyCore::set_hunt_privacy(env.clone(), hunt_id, creator.clone(), true).unwrap();
+        HuntyCore::generate_invite_code(
+            env.clone(),
+            hunt_id,
+            creator.clone(),
+            String::from_str(env, "shared-secret"),
+        )
+        .unwrap();
+        HuntyCore::set_hunt_privacy(env.clone(), hunt_id, creator.clone(), false).unwrap();
+    });
+
+    let hunt = as_core_contract(&env, &contract_id, |env| {
+        Storage::get_hunt(env, hunt_id).unwrap()
+    });
+    assert!(!hunt.is_private);
+    assert_eq!(hunt.invite_code_hash, None);
+
+    // Re-privatizing without a fresh code leaves the hunt code-less,
+    // so activation still refuses it instead of reviving the old code.
+    as_core_contract(&env, &contract_id, |env| {
+        HuntyCore::set_hunt_privacy(env.clone(), hunt_id, creator.clone(), true).unwrap();
+    });
+    let hunt = as_core_contract(&env, &contract_id, |env| {
+        Storage::get_hunt(env, hunt_id).unwrap()
+    });
+    assert_eq!(hunt.invite_code_hash, None);
 }
