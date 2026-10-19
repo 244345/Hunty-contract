@@ -1,4 +1,6 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, IntoVal, TryFromVal, Val, Vec};
+use soroban_sdk::{
+    contracttype, symbol_short, Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
+};
 
 use crate::types::{
     DistributionProof, DistributionRecord, PoolDistribution, ResolutionStatus, RewardPoolConfig,
@@ -15,8 +17,13 @@ impl Storage {
     const PENDING_ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("PADMI");
     const XLM_TOKEN_KEY: soroban_sdk::Symbol = symbol_short!("X");
     const NFT_CONTRACT_KEY: soroban_sdk::Symbol = symbol_short!("NFTA");
-    /// Ring-buffer capacity for the per-pool audit log.
+    /// Ring-buffer capacity for per-player distribution entries.
     pub const MAX_AUDIT_ENTRIES_PER_POOL: u64 = 50;
+    /// Ring-buffer capacity for the administrative/config audit log
+    /// (creation, funding, config, freeze, refund, migrate, withdraw).
+    /// Deliberately larger than the distribution buffer so a popular hunt's
+    /// payouts can never evict its creation/funding trail (#1359).
+    pub const MAX_ADMIN_AUDIT_ENTRIES_PER_POOL: u64 = 200;
     const AUDIT_TTL_THRESHOLD: u32 = 172_800;
     const AUDIT_TTL_EXTEND_TO: u32 = 518_400;
     // Daily spending caps
@@ -47,6 +54,10 @@ impl Storage {
     const HAS_AUTH_KEY: soroban_sdk::Symbol = symbol_short!("HAUTH");
     const AUDIT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("AUDC");
     const AUDIT_LOG_KEY: soroban_sdk::Symbol = symbol_short!("AUDL");
+    /// Separate ring buffer for high-volume per-player distribution entries,
+    /// so payouts can never evict the administrative trail (#1359).
+    const DIST_AUDIT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("DSTAUDC");
+    const DIST_AUDIT_LOG_KEY: soroban_sdk::Symbol = symbol_short!("DSTAUDL");
     const PAUSED_KEY: soroban_sdk::Symbol = symbol_short!("PAUSE");
     // Granular pause flags (issue #628), mirroring the per-operation pauses
     // hunty-core already exposes. The global PAUSED_KEY above still overrides
@@ -593,25 +604,72 @@ impl Storage {
 
     // ========== Audit Log ==========
 
-    /// Append one entry to a fixed-size ring buffer. `count` is a monotonically
-    /// increasing sequence number; the actual storage footprint is capped at
-    /// `MAX_AUDIT_ENTRIES_PER_POOL` slots.
+    /// Append one entry to the pool's audit trail. Per-player
+    /// `Distribute` entries go to a dedicated distribution ring buffer,
+    /// while administrative and config entries (create, fund, config,
+    /// freeze, refund, migrate, withdraw) go to a separate, larger admin
+    /// log — so a popular hunt's payouts can never overwrite the funding
+    /// and configuration history that matters most in a dispute (#1359).
+    ///
+    /// Unified sequence numbers are preserved: `[0, admin_count)` address
+    /// the admin log and `[admin_count, admin_count + dist_count)` address
+    /// the distribution log (each reduced modulo its own ring capacity).
     pub fn append_audit_entry(env: &Env, hunt_id: u64, entry: PoolAuditEntry) {
-        let count_key = (Self::AUDIT_COUNT_KEY, hunt_id);
-        let current_count: u64 = Self::get_pool_audit_count(env, hunt_id);
-        let index = current_count % Self::MAX_AUDIT_ENTRIES_PER_POOL;
-        let log_key = (Self::AUDIT_LOG_KEY, hunt_id, index);
-
-        env.storage().persistent().set(&log_key, &entry);
-        Self::touch_audit_key(env, &log_key);
-        env.storage()
-            .persistent()
-            .set(&count_key, &current_count.saturating_add(1));
-        Self::touch_audit_key(env, &count_key);
+        if entry.operation == PoolOperation::Distribute {
+            Self::append_ring_entry(
+                env,
+                Self::DIST_AUDIT_COUNT_KEY,
+                Self::DIST_AUDIT_LOG_KEY,
+                Self::MAX_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                entry,
+            );
+        } else {
+            Self::append_ring_entry(
+                env,
+                Self::AUDIT_COUNT_KEY,
+                Self::AUDIT_LOG_KEY,
+                Self::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                entry,
+            );
+        }
     }
 
-    /// Returns the cumulative number of entries ever appended for a pool.
+    /// Append one entry to a fixed-size ring buffer. `count` is a monotonically
+    /// increasing sequence number; the actual storage footprint is capped at
+    /// `capacity` slots.
+    fn append_ring_entry(
+        env: &Env,
+        count_key: Symbol,
+        log_key: Symbol,
+        capacity: u64,
+        hunt_id: u64,
+        entry: PoolAuditEntry,
+    ) {
+        let key = (count_key, hunt_id);
+        let current: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        let index = current % capacity;
+        let entry_key = (log_key, hunt_id, index);
+
+        env.storage().persistent().set(&entry_key, &entry);
+        Self::touch_audit_key(env, &entry_key);
+        env.storage()
+            .persistent()
+            .set(&key, &current.saturating_add(1));
+        Self::touch_audit_key(env, &key);
+    }
+
+    /// Returns the cumulative number of entries ever appended for a pool,
+    /// across both the admin and the distribution logs.
     pub fn get_pool_audit_count(env: &Env, hunt_id: u64) -> u64 {
+        Self::get_pool_admin_audit_count(env, hunt_id)
+            .saturating_add(Self::get_pool_distribution_audit_count(env, hunt_id))
+    }
+
+    /// Returns the cumulative number of administrative/config entries ever
+    /// appended for a pool.
+    pub fn get_pool_admin_audit_count(env: &Env, hunt_id: u64) -> u64 {
         let count_key = (Self::AUDIT_COUNT_KEY, hunt_id);
         let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
         if env.storage().persistent().has(&count_key) {
@@ -620,15 +678,52 @@ impl Storage {
         count
     }
 
-    /// Reads an entry by its sequence number. Sequence numbers are reduced
-    /// modulo the ring capacity for storage, so callers can page across wraps.
+    /// Returns the cumulative number of per-player distribution entries ever
+    /// appended for a pool.
+    pub fn get_pool_distribution_audit_count(env: &Env, hunt_id: u64) -> u64 {
+        let count_key = (Self::DIST_AUDIT_COUNT_KEY, hunt_id);
+        let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        if env.storage().persistent().has(&count_key) {
+            Self::touch_audit_key(env, &count_key);
+        }
+        count
+    }
+
+    /// Reads an entry by its unified sequence number (see
+    /// [`Self::append_audit_entry`]). Sequence numbers are reduced modulo
+    /// the owning ring's capacity for storage, so callers can page across
+    /// wraps. Returns `None` for evicted (overwritten) slots.
     pub fn get_pool_audit_entry(env: &Env, hunt_id: u64, index: u64) -> Option<PoolAuditEntry> {
-        let log_key = (
-            Self::AUDIT_LOG_KEY,
-            hunt_id,
-            index % Self::MAX_AUDIT_ENTRIES_PER_POOL,
-        );
-        let raw: Option<Val> = env.storage().persistent().get(&log_key);
+        let admin_count = Self::get_pool_admin_audit_count(env, hunt_id);
+        if index < admin_count {
+            Self::get_ring_entry(
+                env,
+                Self::AUDIT_LOG_KEY,
+                Self::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                index,
+            )
+        } else {
+            Self::get_ring_entry(
+                env,
+                Self::DIST_AUDIT_LOG_KEY,
+                Self::MAX_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                index.saturating_sub(admin_count),
+            )
+        }
+    }
+
+    /// Reads a ring-buffer entry by its per-log sequence number.
+    fn get_ring_entry(
+        env: &Env,
+        log_key: Symbol,
+        capacity: u64,
+        hunt_id: u64,
+        index: u64,
+    ) -> Option<PoolAuditEntry> {
+        let key = (log_key, hunt_id, index % capacity);
+        let raw: Option<Val> = env.storage().persistent().get(&key);
         let entry = raw.and_then(|value| {
             if let Ok(entry) = PoolAuditEntry::try_from_val(env, &value) {
                 return Some(entry);
@@ -672,7 +767,7 @@ impl Storage {
             })
         });
         if entry.is_some() {
-            Self::touch_audit_key(env, &log_key);
+            Self::touch_audit_key(env, &key);
         }
         entry
     }

@@ -189,6 +189,16 @@ pub struct NftMintFailedEvent {
     pub nft_contract: Option<Address>,
 }
 
+/// Event emitted when a failed NFT mint is successfully retried.
+/// Indexers that observed `NFT_FAIL` can use this to see the resolution.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct NftMintRetriedEvent {
+    pub hunt_id: u64,
+    pub player: Address,
+    pub nft_id: u64,
+}
+
 /// Event emitted when admin withdraws unclaimed rewards from a pool.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -301,7 +311,13 @@ pub struct EmergencyWithdrawalLogEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolAuditLogResponse {
     pub entries: Vec<PoolAuditEntry>,
+    /// Lifetime number of entries ever appended for this pool, including
+    /// entries already evicted from the retained ring-buffer window.
     pub total: u64,
+    /// Number of entries currently retained (never larger than the
+    /// ring-buffer capacity). Page `offset` runs from 0 to `retained`;
+    /// `total` may exceed `retained` once the buffer has wrapped.
+    pub retained: u64,
 }
 
 /// Event emitted when a vesting schedule is created for a player.
@@ -566,6 +582,23 @@ impl RewardManager {
     ) -> Result<(), RewardErrorCode> {
         Self::require_admin(&env, &admin)?;
         Storage::remove_authorized_contract(&env, &contract);
+        Ok(())
+    }
+
+    /// Sets the large-withdrawal alert threshold for a specific token
+    /// (raw token units). Only the contract admin can call this. Tokens
+    /// without a configured threshold fall back to the XLM-calibrated
+    /// default, so non-XLM pools should set their own value.
+    pub fn set_large_withdrawal_threshold(
+        env: Env,
+        admin: Address,
+        token: Address,
+        threshold: i128,
+    ) -> Result<(), RewardErrorCode> {
+        Self::require_admin(&env, &admin)?;
+        hunty_common::monitoring::Monitoring::set_large_withdrawal_threshold(
+            &env, &token, threshold,
+        );
         Ok(())
     }
 
@@ -1379,8 +1412,12 @@ impl RewardManager {
         // Verify the hunt is in a terminal state (Cancelled or past end_time).
         // HuntyCore exposes this as `is_hunt_terminal`; when HuntyCore is not
         // configured the check is skipped and the creator is trusted.
+        // A passed claim deadline also makes the pool eligible for refund so
+        // unclaimed funds are recoverable once claims are no longer allowed.
         if let Some(hunty_core) = Storage::get_hunty_core(&env) {
-            if !Self::is_hunt_terminal(&env, &hunty_core, hunt_id) {
+            let deadline_passed = pool_config.claim_deadline > 0
+                && env.ledger().timestamp() > pool_config.claim_deadline;
+            if !deadline_passed && !Self::is_hunt_terminal(&env, &hunty_core, hunt_id) {
                 return Err(RewardErrorCode::InvalidHuntStatus);
             }
         }
@@ -2063,6 +2100,9 @@ impl RewardManager {
             return Err(RewardErrorCode::PoolFrozen);
         }
 
+        // Reject distribution once the pool's claim deadline has passed
+        Self::ensure_claims_open(&env, &pool_config)?;
+
         // Prevent double distribution: check if a distribution record already exists
         if Storage::get_distribution_record(&env, hunt_id, &player_address).is_some() {
             return Err(RewardErrorCode::AlreadyDistributed);
@@ -2479,6 +2519,8 @@ impl RewardManager {
                     {
                         return Err(RewardErrorCode::BelowMinimumAmount);
                     }
+                    // Batch entries honor the pool's claim deadline too
+                    Self::ensure_claims_open(&env, &pool_config)?;
                 } else {
                     return Err(RewardErrorCode::PoolNotFound);
                 }
@@ -2757,6 +2799,8 @@ impl RewardManager {
     ) -> Result<u64, RewardErrorCode> {
         caller.require_auth();
 
+        Self::ensure_distribution_allowed(env.clone())?;
+
         let pending = Storage::get_pending_nft_mint(&env, hunt_id, &player)
             .ok_or(RewardErrorCode::NftMintPendingNotFound)?;
 
@@ -2786,6 +2830,15 @@ impl RewardManager {
         }
 
         Storage::remove_pending_nft_mint(&env, hunt_id, &player);
+
+        env.events().publish(
+            (symbol_short!("NFT_RTRY"), hunt_id),
+            NftMintRetriedEvent {
+                hunt_id,
+                player: player.clone(),
+                nft_id,
+            },
+        );
 
         Ok(nft_id)
     }
@@ -3104,6 +3157,82 @@ impl RewardManager {
         Ok(())
     }
 
+    /// Sets the unix timestamp after which claims are no longer allowed
+    /// (`claim_deadline`; 0 disables the deadline and restores the previous
+    /// always-claimable behavior).
+    ///
+    /// Only the pool creator may call this, and only while the hunt is still
+    /// a Draft: once the hunt is live, moving the deadline would change the
+    /// rules mid-hunt. When HuntyCore is not configured the Draft check is
+    /// skipped and the creator is trusted (same convention as the
+    /// refund/migrate eligibility checks).
+    ///
+    /// Once the deadline passes, `distribute_rewards` (including batch and
+    /// proportional paths) and `claim_vested` reject new claims with
+    /// `ClaimDeadlineExceeded`, while `refund_pool` treats the expired pool
+    /// as eligible for refund so unclaimed funds are recoverable.
+    ///
+    /// # Arguments
+    /// * `creator` - Pool owner (must match stored creator)
+    /// * `hunt_id` - The hunt whose pool to configure
+    /// * `claim_deadline` - Unix timestamp after which claims are rejected
+    ///   (0 = disabled)
+    ///
+    /// # Errors
+    /// * `PoolNotFound` - Pool does not exist
+    /// * `Unauthorized` - Caller is not the pool creator
+    /// * `InvalidHuntStatus` - Hunt is no longer a Draft (only when
+    ///   HuntyCore is configured)
+    pub fn set_claim_deadline(
+        env: Env,
+        creator: Address,
+        hunt_id: u64,
+        claim_deadline: u64,
+    ) -> Result<(), RewardErrorCode> {
+        creator.require_auth();
+
+        let mut config =
+            Storage::get_pool_config(&env, hunt_id).ok_or(RewardErrorCode::PoolNotFound)?;
+
+        if creator != config.creator {
+            return Err(RewardErrorCode::Unauthorized);
+        }
+
+        if let Some(hunty_core) = Storage::get_hunty_core(&env) {
+            if !matches!(Self::hunt_status(&env, &hunty_core, hunt_id), Some(0)) {
+                return Err(RewardErrorCode::InvalidHuntStatus);
+            }
+        }
+
+        let old_value = config.claim_deadline;
+        config.claim_deadline = claim_deadline;
+        Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_DLINE"), hunt_id),
+            (creator.clone(), old_value, claim_deadline),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::SetClaimDeadline,
+            None,
+        );
+
+        Ok(())
+    }
+
+    /// Rejects the call when the pool's claim deadline has passed.
+    /// A deadline of 0 disables the check (claims always allowed).
+    fn ensure_claims_open(env: &Env, pool_config: &RewardPoolConfig) -> Result<(), RewardErrorCode> {
+        if pool_config.claim_deadline > 0 && env.ledger().timestamp() > pool_config.claim_deadline
+        {
+            return Err(RewardErrorCode::ClaimDeadlineExceeded);
+        }
+        Ok(())
+    }
+
     /// Claims the proportionally vested XLM reward for the caller.
     ///
     /// The claimable amount is: `total_amount * min(elapsed / vesting_period_secs, 1) - claimed_amount`.
@@ -3166,6 +3295,9 @@ impl RewardManager {
         if pool_config.frozen {
             return Err(RewardErrorCode::PoolFrozen);
         }
+
+        // No vesting claims once the pool's claim deadline has passed
+        Self::ensure_claims_open(&env, &pool_config)?;
 
         let token_address = &pool_config.token_address;
 
@@ -3505,10 +3637,12 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, amount);
-        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
-
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
+
+        hunty_common::monitoring::Monitoring::record_large_withdrawal_for_token(
+            &env, &xlm_token, amount,
+        );
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let contract_addr = env.current_contract_address();
         let client = soroban_sdk::token::Client::new(&env, &xlm_token);
@@ -3600,10 +3734,12 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
-        hunty_common::monitoring::Monitoring::record_large_withdrawal(&env, balance);
-        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
-
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
+
+        hunty_common::monitoring::Monitoring::record_large_withdrawal_for_token(
+            &env, &xlm_token, balance,
+        );
+        hunty_common::monitoring::Monitoring::record_invocation(&env, 80_000, true);
 
         let contract_addr = env.current_contract_address();
         let client = soroban_sdk::token::Client::new(&env, &xlm_token);
@@ -3939,6 +4075,14 @@ impl RewardManager {
         Ok(proposal)
     }
 
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::RewardManagerMigration::cancel_upgrade(&env, &admin)?;
+        Ok(proposal)
+    }
+
     pub fn upgrade(
         env: Env,
         admin: Address,
@@ -3997,6 +4141,7 @@ impl RewardManager {
                 migration::RewardManagerMigration::upgrade_executed_event(
                     from_version,
                     report.to_version,
+                    &BytesN::from_array(&env, &[0u8; 32]),
                     env.ledger().timestamp(),
                     admin,
                 ),
@@ -4017,29 +4162,46 @@ impl RewardManager {
     }
 
     /// Exposes a paginated read query for the audit log of a given pool.
+    ///
+    /// `offset` is a 0-based index into the retained rolling window (not a
+    /// sequence cursor): valid offsets run from 0 to `retained`. `total` is
+    /// the lifetime append count and may exceed `retained` once the ring
+    /// buffer has wrapped, so clients must page until
+    /// `offset >= retained`, not `offset >= total`.
     pub fn get_pool_audit_log(
         env: Env,
         hunt_id: u64,
-        start_after: Option<u64>,
+        offset: Option<u64>,
         limit: Option<u32>,
     ) -> PoolAuditLogResponse {
-        // `start_after` is an offset within the retained rolling window. This
-        // keeps pagination stable even when the ring buffer has wrapped.
+        // `offset` indexes into the retained rolling window. This keeps
+        // pagination stable even when the ring buffer has wrapped.
+        // The trail is split across an admin log and a distribution log
+        // (#1359); sequence numbers are unified (admin first), so the
+        // retained window spans both buffers.
         let default_limit = 20;
-        let max_limit = Storage::MAX_AUDIT_ENTRIES_PER_POOL as u32;
+        let max_limit =
+            (Storage::MAX_AUDIT_ENTRIES_PER_POOL + Storage::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL) as u32;
         let query_limit = limit.unwrap_or(default_limit).min(max_limit) as u64;
-        let total = Storage::get_pool_audit_count(&env, hunt_id);
+        let admin_total = Storage::get_pool_admin_audit_count(&env, hunt_id);
+        let dist_total = Storage::get_pool_distribution_audit_count(&env, hunt_id);
+        let total = admin_total.saturating_add(dist_total);
         let mut entries = Vec::new(&env);
 
+        let retained = admin_total
+            .min(Storage::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL)
+            .saturating_add(dist_total.min(Storage::MAX_AUDIT_ENTRIES_PER_POOL));
         if total == 0 || query_limit == 0 {
-            return PoolAuditLogResponse { entries, total };
+            return PoolAuditLogResponse {
+                entries,
+                total,
+                retained,
+            };
         }
 
-        let capacity = Storage::MAX_AUDIT_ENTRIES_PER_POOL;
-        let window_len = total.min(capacity);
-        let oldest = total.saturating_sub(window_len);
-        let offset = start_after.unwrap_or(0).min(window_len);
-        let first = oldest.saturating_add(offset);
+        let oldest = total.saturating_sub(retained);
+        let start = offset.unwrap_or(0).min(retained);
+        let first = oldest.saturating_add(start);
         let end = total.min(first.saturating_add(query_limit));
         let mut sequence = first;
         while sequence < end {
@@ -4049,7 +4211,11 @@ impl RewardManager {
             sequence = sequence.saturating_add(1);
         }
 
-        PoolAuditLogResponse { entries, total }
+        PoolAuditLogResponse {
+            entries,
+            total,
+            retained,
+        }
     }
 }
 

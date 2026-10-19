@@ -83,12 +83,54 @@ REWARD_MANAGER_ID="$(deploy_contract reward_manager \
 # Do NOT pass "0" — the CLI encodes it as Some(0), capping supply at zero so
 # every mint fails with MaxSupplyReached.
 # metadata: name, description, total_supply, creator
+# The minter MUST be the reward-manager contract (not the deployer) so
+# reward-manager can mint NFTs during distribution.
 NFT_METADATA="{\"name\":\"Hunty NFT Reward\",\"description\":\"Reward NFTs for completed hunts\",\"total_supply\":0,\"creator\":\"$DEPLOYER_ADDRESS\"}"
 NFT_REWARD_ID="$(deploy_contract nft_reward \
   "$DEPLOYER_ADDRESS" \
-  "$DEPLOYER_ADDRESS" \
-  "null" \
+  "$REWARD_MANAGER_ID" \
+  "0" \
   "$NFT_METADATA")"
+
+invoke() {
+  local id="$1"
+  shift
+  stellar contract invoke \
+    --id "$id" \
+    --source "$SOURCE_ACCOUNT" \
+    --rpc-url "$RPC_URL" \
+    --network-passphrase "$PASSPHRASE" \
+    -- "$@"
+}
+
+echo "Linking contracts..."
+
+# 1. Set the default NFT contract on reward-manager
+invoke "$REWARD_MANAGER_ID" \
+  -- set_nft_reward_contract \
+  --admin "$DEPLOYER_ADDRESS" \
+  --nft_contract "$NFT_REWARD_ID"
+echo "  nft-reward linked to reward-manager."
+
+# 2. Initialize hunty-core admin (constructor does not set one)
+invoke "$HUNTY_CORE_ID" \
+  -- initialize_admin \
+  --admin "$DEPLOYER_ADDRESS"
+echo "  hunty-core initialized."
+
+# 3. Link reward-manager to hunty-core so complete_hunt can pay out
+invoke "$HUNTY_CORE_ID" \
+  -- set_reward_manager \
+  --admin "$DEPLOYER_ADDRESS" \
+  --reward_manager "$REWARD_MANAGER_ID"
+echo "  reward-manager linked to hunty-core."
+
+# 4. Register hunty-core as a distributor on reward-manager
+invoke "$REWARD_MANAGER_ID" \
+  -- add_authorized_contract \
+  --admin "$DEPLOYER_ADDRESS" \
+  --contract "$HUNTY_CORE_ID"
+echo "  hunty-core registered as distributor on reward-manager."
 
 cat > "config/contracts.${ENVIRONMENT}.json" <<JSON
 {
@@ -113,3 +155,13 @@ echo "Wrote config/contracts.${ENVIRONMENT}.json"
 echo ""
 echo "Validating config placeholders..."
 bash scripts/validate_placeholders.sh
+
+# Verify every cross-contract link before returning success
+echo ""
+echo "Running deployment verification..."
+HUNTY_CORE_ID="$HUNTY_CORE_ID" \
+REWARD_MANAGER_ID="$REWARD_MANAGER_ID" \
+NFT_REWARD_ID="$NFT_REWARD_ID" \
+SOURCE_ACCOUNT="$SOURCE_ACCOUNT" \
+bash scripts/verify_deployment.sh "$NETWORK"
+echo "Deployment verified."
