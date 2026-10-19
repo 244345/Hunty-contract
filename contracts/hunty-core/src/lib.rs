@@ -110,6 +110,9 @@ mod paused_status_test;
 mod registration_capacity_test;
 #[cfg(test)]
 mod submission_recording_test;
+// Regression tests for #1255 (answer normalization).
+#[cfg(test)]
+mod answer_normalization_test;
 // Regression tests for #1011-#1014 (admin persistence, reward-config auth,
 // global pause checks, duplicate registration).
 #[cfg(test)]
@@ -807,7 +810,8 @@ impl HuntyCore {
     /// * `env` - The Soroban environment
     /// * `hunt_id` - The hunt to add the clue to
     /// * `question` - The clue question text (max 2000 chars, non-empty)
-    /// * `answer` - Plain-text answer; normalized (trimmed, lowercased) then hashed
+    /// * `answer` - Plain-text answer; normalized (trimmed, whitespace-collapsed,
+    ///   ASCII-lowercased) then hashed
     /// * `points` - Points awarded for solving this clue (must be within 1..=10_000)
     /// * `is_required` - Whether this clue must be solved to complete the hunt
     /// * `difficulty` - Optional difficulty tier (defaults to 1) used as a multiplier on
@@ -1390,44 +1394,76 @@ impl HuntyCore {
         out
     }
 
-    /// Normalizes answer (trim, lowercase) and returns SHA256 hash as BytesN<32>.
-    /// Uses hunt_id and clue_id as salt to prevent rainbow table precomputation.
-    /// Hashing scheme: SHA256(hunt_id || clue_id || normalized_answer)
+    /// Normalizes an answer and returns SHA256(hunt_id || clue_id || normalized_answer).
+    ///
+    /// The hunt and clue ids act as a salt so the hashes cannot be precomputed
+    /// from a rainbow table of common answers.
+    ///
+    /// Normalization is applied to the raw UTF-8 bytes:
+    ///
+    /// - leading and trailing ASCII whitespace (space, `\t`, `\n`, `\r`) is trimmed;
+    /// - an internal run of those characters collapses to a single space, so
+    ///   `"New   York"` and `"new york"` produce the same hash;
+    /// - ASCII `A-Z` is lowercased.
+    ///
+    /// # Non-ASCII input
+    ///
+    /// Non-ASCII characters are preserved byte-for-byte: `ÉCOLE` lowercases to
+    /// `École`, not `école`. The contract cannot perform Unicode case folding or
+    /// normalization on-chain, so creators who expect accented or non-Latin
+    /// spellings should register the variants with [`Self::add_clue_aliases`].
+    ///
+    /// Off-chain callers of [`Self::submit_answer_with_hash`] must apply exactly
+    /// this normalization before hashing (see `bindings/hunty-core`
+    /// `hashAnswer`).
     pub(crate) fn normalize_and_hash_answer(
         env: &Env,
         hunt_id: u64,
         clue_id: u32,
         answer: &String,
     ) -> Result<BytesN<32>, HuntError> {
+        // Sanitizing validates UTF-8 and trims the outer whitespace.
         let answer =
             crate::sanitization::StringSanitizer::sanitize(env, answer, MAX_ANSWER_LENGTH, false)
                 .map_err(|_| HuntError::InvalidAnswer)?;
-        let n = answer.len();
+        let n = answer.len() as usize;
         if n == 0 {
             return Err(HuntError::InvalidAnswer);
         }
-        let mut buf = [0u8; 256 + 12];
+
+        let mut raw = [0u8; MAX_ANSWER_LENGTH as usize];
+        answer.copy_into_slice(&mut raw[..n]);
+
+        let mut buf = [0u8; 12 + MAX_ANSWER_LENGTH as usize];
         buf[..8].copy_from_slice(&hunt_id.to_be_bytes());
         buf[8..12].copy_from_slice(&clue_id.to_be_bytes());
-        answer.copy_into_slice(&mut buf[12..12 + n as usize]);
-        let total_len = 12 + n as usize;
-        let mut start = 12usize;
-        let mut end = total_len;
-        while start < end && Self::is_ascii_space(buf[start]) {
-            start += 1;
-        }
-        while end > start && Self::is_ascii_space(buf[end - 1]) {
-            end -= 1;
-        }
-        if start >= end {
-            return Err(HuntError::InvalidAnswer);
-        }
-        for b in &mut buf[start..end] {
-            if b.is_ascii_uppercase() {
-                *b += b'a' - b'A';
+
+        // Collapse internal whitespace runs while lowercasing ASCII. The input
+        // was already trimmed by the sanitizer, so this cannot start or end
+        // with a space. Collapsing only shortens the input, so `buf` is large
+        // enough. ASCII whitespace bytes never occur inside a multi-byte UTF-8
+        // sequence, so byte-wise processing keeps non-ASCII text intact.
+        let mut out = 12usize;
+        let mut pending_space = false;
+        for &b in &raw[..n] {
+            if Self::is_ascii_space(b) {
+                pending_space = true;
+                continue;
             }
+            if pending_space && out > 12 {
+                buf[out] = b' ';
+                out += 1;
+            }
+            pending_space = false;
+            buf[out] = if b.is_ascii_uppercase() {
+                b + (b'a' - b'A')
+            } else {
+                b
+            };
+            out += 1;
         }
-        let normalized = Bytes::from_slice(env, &buf[..end]);
+
+        let normalized = Bytes::from_slice(env, &buf[..out]);
         let hash = env.crypto().sha256(&normalized);
         Ok(hash.to_bytes())
     }
@@ -1445,7 +1481,9 @@ impl HuntyCore {
 
     #[inline]
     fn is_ascii_space(b: u8) -> bool {
-        b.is_ascii_whitespace()
+        // Matches the characters `StringSanitizer` treats as whitespace, so
+        // trimming and collapsing agree.
+        matches!(b, b' ' | b'\t' | b'\n' | b'\r')
     }
 
     fn validate_categories(
@@ -3520,6 +3558,12 @@ impl HuntyCore {
     ///
     /// Shares the incorrect-answer semantics of `submit_answer`: a wrong answer
     /// returns `Ok(false)` and commits the failed attempt.
+    ///
+    /// The hash must be built with exactly the normalization described on
+    /// [`Self::normalize_and_hash_answer`]: outer ASCII whitespace trimmed,
+    /// internal runs collapsed to one space, ASCII `A-Z` lowercased, non-ASCII
+    /// bytes unchanged. Off-chain callers can use the `hashAnswer` helper in
+    /// `bindings/hunty-core`.
     pub fn submit_answer_with_hash(
         env: Env,
         hunt_id: u64,
