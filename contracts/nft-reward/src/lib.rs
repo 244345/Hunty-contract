@@ -86,6 +86,9 @@ pub struct NftReward;
 
 #[contractimpl]
 impl NftReward {
+    /// Storage key for the whitelisted minter recorded at deployment time.
+    const MINTER_KEY: Symbol = symbol_short!("MINTER");
+
     /// Constructor - runs atomically during deployment.
     /// Prevents front-running by initializing during deploy transaction.
     #[allow(unused_variables)]
@@ -103,7 +106,7 @@ impl NftReward {
         // Store minter
         env.storage()
             .instance()
-            .set(&symbol_short!("MINTER"), &minter);
+            .set(&Self::MINTER_KEY, &minter);
         // Store max supply if provided
         if let Some(max) = max_supply {
             env.storage()
@@ -146,24 +149,41 @@ impl NftReward {
         None
     }
 
+    /// Verifies that `minter` is allowed to mint reward NFTs.
+    ///
+    /// The caller must sign the call (`require_auth`) and must match the MINTER
+    /// recorded by the constructor — anyone else is rejected with
+    /// `NftErrorCode::Unauthorized`. If no MINTER is stored yet (pre-existing
+    /// deployment that predates this guard) the whitelist check is skipped.
+    fn require_minter(env: &Env, minter: &Address) -> Result<(), NftErrorCode> {
+        minter.require_auth();
+        match env.storage().instance().get::<_, Address>(&Self::MINTER_KEY) {
+            Some(whitelisted) if &whitelisted == minter => Ok(()),
+            Some(_) => Err(NftErrorCode::Unauthorized),
+            None => Ok(()),
+        }
+    }
+
     pub fn mint_reward_nft(
-        _env: Env,
-        _minter: Address,
+        env: Env,
+        minter: Address,
         _hunt_id: u64,
         _owner: Address,
         metadata: NftMetadata,
     ) -> Result<u64, NftErrorCode> {
+        Self::require_minter(&env, &minter)?;
         let _ = metadata;
         Ok(1)
     }
 
     pub fn mint_reward_nft_from_map(
-        _env: Env,
-        _minter: Address,
+        env: Env,
+        minter: Address,
         _hunt_id: u64,
         _owner: Address,
         values: Map<Symbol, soroban_sdk::Val>,
     ) -> Result<u64, NftErrorCode> {
+        Self::require_minter(&env, &minter)?;
         let _ = values;
         Ok(1)
     }
@@ -282,5 +302,121 @@ impl NftReward {
         admin: Address,
     ) -> Result<migration::MigrationReport, hunty_migration::UpgradeAuthError> {
         migration::NftRewardMigration::rollback_migration(&env, &admin)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(deprecated)]
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{IntoVal, Map, Symbol, Val};
+
+    fn collection_metadata(env: &Env) -> CollectionMetadata {
+        CollectionMetadata {
+            name: String::from_str(env, "Hunty Rewards"),
+            description: String::from_str(env, "Reward NFTs for completed hunts"),
+            total_supply: 0,
+            creator: None,
+        }
+    }
+
+    fn nft_metadata(env: &Env) -> NftMetadata {
+        NftMetadata {
+            title: String::from_str(env, "Hunt completion"),
+            description: String::from_str(env, "Reward for completing the hunt"),
+            image_uri: String::from_str(env, "ipfs://QmTest"),
+            hunt_title: String::from_str(env, "Test Hunt"),
+            rarity: 0,
+            tier: 0,
+            creator: None,
+            royalty_bps: None,
+            extensions: Map::new(env),
+        }
+    }
+
+    fn minter_values(env: &Env, metadata: &NftMetadata) -> Map<Symbol, Val> {
+        let mut values: Map<Symbol, Val> = Map::new(env);
+        values.set(
+            Symbol::new(env, "title"),
+            metadata.title.clone().into_val(env),
+        );
+        values.set(
+            Symbol::new(env, "description"),
+            metadata.description.clone().into_val(env),
+        );
+        values
+    }
+
+    /// Deploys the contract through its constructor, which records `minter`
+    /// as the only address allowed to mint reward NFTs.
+    fn deploy(env: &Env) -> (NftRewardClient<'_>, Address, Address) {
+        let admin = Address::generate(env);
+        let minter = Address::generate(env);
+        let contract_id = env.register(
+            NftReward,
+            (
+                admin.clone(),
+                minter.clone(),
+                None::<u64>,
+                collection_metadata(env),
+            ),
+        );
+        (NftRewardClient::new(env, &contract_id), minter, admin)
+    }
+
+    #[test]
+    fn mint_reward_nft_rejects_non_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (client, minter, admin) = deploy(&env);
+        let stranger = Address::generate(&env);
+        let owner = Address::generate(&env);
+
+        // Neither a random caller nor the admin is the whitelisted minter.
+        let err = client
+            .mint_reward_nft(&stranger, &1u64, &owner, &nft_metadata(&env))
+            .unwrap_err();
+        assert_eq!(err, NftErrorCode::Unauthorized);
+
+        let err = client
+            .mint_reward_nft(&admin, &1u64, &owner, &nft_metadata(&env))
+            .unwrap_err();
+        assert_eq!(err, NftErrorCode::Unauthorized);
+
+        // The whitelisted minter can still mint.
+        assert_eq!(
+            client
+                .mint_reward_nft(&minter, &1u64, &owner, &nft_metadata(&env))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn mint_reward_nft_from_map_rejects_non_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (client, minter, _admin) = deploy(&env);
+        let stranger = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let values = minter_values(&env, &nft_metadata(&env));
+
+        let err = client
+            .mint_reward_nft_from_map(&stranger, &2u64, &owner, &values)
+            .unwrap_err();
+        assert_eq!(err, NftErrorCode::Unauthorized);
+
+        // The whitelisted minter can still mint.
+        assert_eq!(
+            client
+                .mint_reward_nft_from_map(&minter, &2u64, &owner, &values)
+                .unwrap(),
+            1
+        );
     }
 }
