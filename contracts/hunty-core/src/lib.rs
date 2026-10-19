@@ -97,6 +97,9 @@ mod tests {
 
 #[cfg(test)]
 mod difficulty_override_test;
+// Regression tests for #1251 (difficulty_rating must round, not truncate).
+#[cfg(test)]
+mod difficulty_rating_rounding_test;
 #[cfg(test)]
 mod incorrect_answer_outcome_test;
 #[cfg(test)]
@@ -1569,7 +1572,13 @@ impl HuntyCore {
             // SAFETY: i is within the vector bounds established by the enclosing loop
             total = total.saturating_add(clues.get(i).unwrap().difficulty);
         }
-        hunt.difficulty_rating = total / clues.len();
+        // Round the mean to the nearest tier instead of truncating it: integer
+        // division would rate a hunt of clues 2, 2, 2, 5 as 2 when the clues
+        // average 2.75. Ties round up (2.5 -> 3). `clues` is non-empty here and
+        // a hunt holds at most MAX_CLUES_PER_HUNT clues of at most difficulty 5,
+        // so the addition cannot overflow.
+        let count = clues.len();
+        hunt.difficulty_rating = (total + count / 2) / count;
     }
 
     fn title_contains(title: &String, needle: &String) -> bool {
