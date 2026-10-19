@@ -126,6 +126,8 @@ mod answer_normalization_test;
 // global pause checks, duplicate registration).
 #[cfg(test)]
 mod security_1011_1014_test;
+#[cfg(test)]
+mod statistics_counters_test;
 const MAX_QUESTION_LENGTH: u32 = 2000;
 const MAX_ANSWER_LENGTH: u32 = 256;
 /// Maximum invite-code length in bytes.
@@ -3438,6 +3440,10 @@ impl HuntyCore {
         progress.complete_clue(env, clue_id, score)?;
         Self::record_team_clue_completion(env, hunt, player, clue_id, score);
 
+        // Update running score-sum counter so get_hunt_statistics never needs
+        // to iterate player records (O(1) read instead of O(N) scan).
+        Storage::add_hunt_score(env, hunt_id, score);
+
         if hunt.max_submissions_per_minute > 0 {
             progress.recent_submissions = Vec::new(env);
         }
@@ -3455,6 +3461,8 @@ impl HuntyCore {
             let rank = hunt_mut.completed_count;
             Storage::save_hunt(env, &hunt_mut);
             Storage::increment_player_completed_hunt_count(env, player);
+            // Update the per-hunt completion counter used by get_hunt_statistics.
+            Storage::increment_hunt_completed_count(env, hunt_id);
             // Freeze the rank on the player's progress record so it is
             // available as an authoritative value at reward-claim time.
             progress.completion_rank = rank;
@@ -4132,24 +4140,18 @@ impl HuntyCore {
 
     /// Returns aggregate statistics for a hunt (read-only): total players, completion rate, average score.
     /// Returns error if hunt does not exist.
+    ///
+    /// All three aggregates are maintained as running counters that are updated
+    /// at clue-completion time, so this function performs three O(1) storage reads
+    /// regardless of how many players are registered. It never loads the player
+    /// list, which would exceed the Soroban read budget on large hunts.
     pub fn get_hunt_statistics(env: Env, hunt_id: u64) -> Result<HuntStatistics, HuntErrorCode> {
         let _ = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
-        let players = Storage::get_hunt_players(&env, hunt_id);
-        let total_players = players.len();
-        let mut completed_count: u32 = 0;
-        let mut total_score_sum: u64 = 0;
-        for i in 0..players.len() {
-            // SAFETY: i is within the vector bounds established by the enclosing loop
-            let p = players.get(i).unwrap();
-            if p.is_completed {
-                completed_count = completed_count
-                    .checked_add(1)
-                    .ok_or(HuntErrorCode::ScoreOverflow)?;
-            }
-            total_score_sum = total_score_sum
-                .checked_add(p.total_score as u64)
-                .ok_or(HuntErrorCode::ScoreOverflow)?;
-        }
+
+        let total_players = Storage::get_player_count(&env, hunt_id);
+        let completed_count = Storage::get_hunt_completed_count(&env, hunt_id);
+        let total_score_sum = Storage::get_hunt_score_sum(&env, hunt_id);
+
         let completion_rate_percent = if total_players > 0 {
             completed_count
                 .checked_mul(100)
