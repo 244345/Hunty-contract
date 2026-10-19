@@ -251,6 +251,9 @@ pub enum PoolOperation {
     SetTimeTiers = 16,
     /// `set_pool_rank_tiers` replaced the rank-based tier schedule.
     SetRankTiers = 17,
+    /// `set_claim_deadline` changed the unix timestamp after which claims
+    /// are no longer allowed (0 = disabled).
+    SetClaimDeadline = 18,
 }
 
 /// Comprehensive statistics for a reward pool, returned by get_pool_statistics().

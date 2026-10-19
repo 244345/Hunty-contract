@@ -1,13 +1,13 @@
-#![allow(dead_code)]
+#![no_std]
 
 mod migration;
+mod storage;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
     String, Symbol, Vec,
 };
 
-pub const MAX_NFT_URI_BYTES: u32 = 100;
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
 
 #[contracterror]
@@ -124,22 +124,6 @@ impl NftReward {
             .set(&symbol_short!("NFTCNT"), &0u64);
     }
 
-    pub fn initialize(
-        _env: Env,
-        _admin: Address,
-        _minter: Address,
-        _max_supply: Option<u64>,
-        _metadata: CollectionMetadata,
-    ) -> Result<(), NftErrorCode> {
-        // @deprecated Use constructor during deployment instead.
-        // This function is kept for backward compatibility but should not be used.
-        Err(NftErrorCode::AlreadyInitialized)
-    }
-
-    pub fn initialize_admin(_env: Env, _admin: Address) -> Result<(), NftErrorCode> {
-        Err(NftErrorCode::AlreadyInitialized)
-    }
-
     pub fn set_reward_manager(
         _env: Env,
         _admin: Address,
@@ -150,6 +134,12 @@ impl NftReward {
 
     pub fn get_total_supply(_env: Env) -> u64 {
         0
+    }
+
+    pub fn get_max_supply(env: Env) -> Option<u64> {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("MAXSPLY"))
     }
 
     pub fn get_nft_metadata(_env: Env, _nft_id: u64) -> Option<NftMetadata> {
@@ -214,6 +204,14 @@ impl NftReward {
         Ok(proposal)
     }
 
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::NftRewardMigration::cancel_upgrade(&env, &admin)?;
+        Ok(proposal)
+    }
+
     pub fn set_upgrade_timelock(
         env: Env,
         admin: Address,
@@ -238,6 +236,16 @@ impl NftReward {
         migration::NftRewardMigration::get_upgrade_history(&env, offset, limit)
     }
 
+    /// Returns a page of schema-migration history entries (no wasm_hash —
+    /// migrations are not WASM upgrades).
+    pub fn get_migration_history(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<hunty_migration::MigrationHistoryEntry> {
+        migration::NftRewardMigration::get_migration_history(&env, offset, limit)
+    }
+
     pub fn upgrade(
         env: Env,
         admin: Address,
@@ -257,11 +265,10 @@ impl NftReward {
             migration::NftRewardMigration::run_migration(&env, &admin, target_version, dry_run)?;
         if !dry_run && report.succeeded && report.from_version < report.to_version {
             env.events().publish(
-                migration::NftRewardMigration::upgrade_executed_topic(&env),
-                migration::NftRewardMigration::upgrade_executed_event(
+                migration::NftRewardMigration::migration_executed_topic(&env),
+                migration::NftRewardMigration::migration_executed_event(
                     from_version,
                     report.to_version,
-                    &BytesN::from_array(&env, &[0u8; 32]),
                     env.ledger().timestamp(),
                     admin,
                 ),
