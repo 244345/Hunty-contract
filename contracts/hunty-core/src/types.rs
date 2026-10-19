@@ -1,5 +1,9 @@
 use soroban_sdk::{contracttype, Address, BytesN, Env, Map, String, Vec};
 
+/// Maximum number of co-creators allowed per hunt.
+/// Bounds the size of the co-creator list so it cannot grow without limit.
+pub const MAX_CO_CREATORS: u32 = 10;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(u32)]
@@ -88,10 +92,12 @@ pub struct Hunt {
     pub max_players: u32,
     /// When true, only players with a valid invite code may register.
     pub is_private: bool,
-    /// SHA256 hash (salted with hunt_id) of the invite code, if configured.
-    pub invite_code_hash: Option<BytesN<32>>,
     /// Dynamically recalculated on every `get_hunt` read; not meaningful when read from a raw struct literal.
     pub remaining_slots: u32,
+    /// Controls who can view the hunt's leaderboard. Defaults to Public.
+    pub leaderboard_visibility: LeaderboardVisibility,
+    /// SHA256 hash of the invite code (salted with hunt_id). None if no invite code is set.
+    pub invite_code_hash: Option<BytesN<32>>,
 }
 
 #[contracttype]
@@ -105,6 +111,7 @@ pub struct HuntCache {
     pub total_clues: u32,
     pub required_clues: u32,
     pub max_winners: u32,
+    pub activated_at: u64,
 }
 
 impl HuntCache {
@@ -118,6 +125,7 @@ impl HuntCache {
             total_clues: hunt.total_clues,
             required_clues: hunt.required_clues,
             max_winners: hunt.reward_config.max_winners,
+            activated_at: hunt.activated_at,
         }
     }
 }
@@ -137,6 +145,12 @@ pub struct Clue {
     pub hint_penalty_points: u32,
 }
 
+/// Sentinel value used by `ClueInfo` when the caller is not yet allowed to
+/// see the clue question (unregistered caller, or hunt not yet started).
+/// The question field is replaced with this marker so that clients can
+/// distinguish a redacted clue from a genuinely empty question.
+pub const REDACTED_QUESTION: &str = "[locked]";
+
 /// Input payload for adding multiple clues in one contract invocation.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +162,10 @@ pub struct BatchClueInput {
     /// Difficulty tier (1-5, 1 = easiest, 5 = hardest).
     /// Difficulty multiplies the clue's points: points earned = points * difficulty.
     pub difficulty: u32,
+    /// Optional weight multiplier, matching the `weight` argument of
+    /// `add_clue`. `None` defaults to 1; `Some(0)` is rejected with
+    /// `InvalidWeight`.
+    pub weight: Option<u32>,
 }
 
 /// Clue info returned by get_clue/list_clues. Excludes answer hash.
@@ -164,6 +182,14 @@ pub struct ClueInfo {
     pub hint_penalty_points: u32,
 }
 
+impl ClueInfo {
+    /// Returns true when the question has been redacted because the caller
+    /// is not yet entitled to view it (see `get_clue`/`list_clues`).
+    pub fn is_question_redacted(&self) -> bool {
+        self.question == String::from_str(&Env::default(), REDACTED_QUESTION)
+    }
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct HuntCancelledEvent {
@@ -173,12 +199,14 @@ pub struct HuntCancelledEvent {
 /// Emitted when a creator force-closes a hunt early (marks it Completed) while
 /// preserving player scores and any already-distributed rewards. `rewarded_players`
 /// is the number of completed players who received a final reward as part of closing.
+/// `unpaid_players` lists eligible players whose final reward distribution failed.
 #[contracttype]
 #[derive(Clone)]
 pub struct HuntClosedEvent {
     pub hunt_id: u64,
     pub closed_at: u64,
     pub rewarded_players: u32,
+    pub unpaid_players: Vec<Address>,
 }
 
 #[contracttype]
@@ -448,9 +476,6 @@ impl PlayerProgress {
         if self.has_requested_hint(clue_id) {
             return Err(crate::errors::HuntErrorCode::HintAlreadyUnlocked);
         }
-        if self.total_score < penalty {
-            return Err(crate::errors::HuntErrorCode::InsufficientScore);
-        }
         self.total_score = self.total_score.saturating_sub(penalty);
         self.hinted_clues.push_back(clue_id);
         Ok(())
@@ -517,6 +542,21 @@ impl RewardConfig {
     }
 }
 
+/// Bounds a live-pool per-winner share so earlier winners are never
+/// shortchanged: never below the activation snapshot share, and never
+/// above the total remaining balance.
+pub fn bounded_flat_amount(
+    snapshot_per_winner: i128,
+    live_balance: i128,
+    remaining_winners: u32,
+) -> i128 {
+    if remaining_winners == 0 || live_balance <= 0 {
+        return snapshot_per_winner;
+    }
+    let live_share = live_balance / (remaining_winners as i128);
+    snapshot_per_winner.max(live_share).min(live_balance)
+}
+
 // Events
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -545,6 +585,14 @@ pub struct HuntStatusChangedEvent {
     pub hunt_id: u64,
     pub old_status: HuntStatus,
     pub new_status: HuntStatus,
+    pub changed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HuntPrivacyChangedEvent {
+    pub hunt_id: u64,
+    pub is_private: bool,
     pub changed_at: u64,
 }
 
@@ -688,8 +736,11 @@ pub struct LeaderboardIndexEntry {
     pub is_completed: bool,
 }
 
-/// Wrapper returned by `get_hunt_leaderboard` that includes truncation
-/// information so callers can tell when the visible entries are incomplete.
+/// Wrapper returned by `get_hunt_leaderboard`.
+///
+/// `truncated` is true when the bounded ranked index is full and may have
+/// omitted additional ranked players. Registrations without a score do not
+/// make the leaderboard truncated.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaderboardResult {
@@ -863,9 +914,53 @@ pub struct RegistrationDeadlineSetEvent {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct HuntDifficultyOverrideSetEvent {
+    pub hunt_id: u64,
+    pub caller: Address,
+    pub difficulty_override: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct PartialScoreClaimedEvent {
     pub hunt_id: u64,
     pub player: Address,
     pub partial_score: u32,
     pub clues_completed: u32,
+}
+
+/// Emitted when a co-creator is added to a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorAddedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when a co-creator is removed from a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorRemovedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when view-only access is granted to an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessGrantedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
+}
+
+/// Emitted when view-only access is revoked from an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessRevokedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
 }

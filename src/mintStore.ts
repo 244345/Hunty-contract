@@ -1,4 +1,5 @@
 import { createClient, RedisClientType } from 'redis';
+import { randomUUID } from 'crypto';
 
 export type TryRecordResult =
   | { allowed: true; count: number }
@@ -53,7 +54,7 @@ export class MemoryMintStore implements MintRecordStore {
 
 const KEY_PREFIX = 'mint:ratelimit:';
 
-const TRY_RECORD_LUA = `
+export const TRY_RECORD_LUA = `
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 local count = redis.call('ZCARD', KEYS[1])
 local maxMints = tonumber(ARGV[3])
@@ -61,7 +62,7 @@ if count >= maxMints then
   local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
   return {0, tonumber(oldest[2])}
 end
-redis.call('ZADD', KEYS[1], ARGV[2], ARGV[2])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[5])
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
 return {1, count + 1}
 `;
@@ -96,7 +97,12 @@ export class RedisMintStore implements MintRecordStore {
     const key = this.key(address);
     await this.client.zRemRangeByScore(key, '-inf', cutoff);
     const members = await this.client.zRangeByScore(key, cutoff, '+inf');
-    return members.map(Number);
+    return members.map((m) => {
+      const sep = m.indexOf('-');
+      // Members are stored as `${score}-${uuid}`; fall back to plain numbers
+      // for entries written before the unique-member fix.
+      return sep === -1 ? Number(m) : Number(m.slice(0, sep));
+    });
   }
 
   async tryRecord(
@@ -108,9 +114,10 @@ export class RedisMintStore implements MintRecordStore {
     await this.ensureConnected();
     // TTL covers a full window plus buffer so idle keys eventually expire.
     const ttlSeconds = Math.max(60, Math.ceil((now - cutoff) / 1000) * 2);
+    const member = `${now}-${randomUUID()}`;
     const raw = (await this.client.eval(TRY_RECORD_LUA, {
       keys: [this.key(address)],
-      arguments: [String(cutoff), String(now), String(maxMints), String(ttlSeconds)],
+      arguments: [String(cutoff), String(now), String(maxMints), String(ttlSeconds), member],
     })) as Array<number | string>;
 
     const allowed = Number(raw[0]) === 1;

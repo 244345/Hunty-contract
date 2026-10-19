@@ -74,15 +74,24 @@ export class MintRateLimiter {
     if (secret !== this.adminSecret) {
       throw new Error('Unauthorized: invalid admin secret');
     }
+    if (update === null || typeof update !== 'object' || Array.isArray(update)) {
+      throw new Error('Invalid config update');
+    }
+    const allowedKeys = new Set(['maxMints', 'windowMs']);
+    for (const key of Object.keys(update)) {
+      if (!allowedKeys.has(key)) {
+        throw new Error(`Unknown config key: ${key}`);
+      }
+    }
     if (update.maxMints !== undefined) {
-      if (update.maxMints < 1) {
-        throw new Error('maxMints must be at least 1');
+      if (!Number.isInteger(update.maxMints) || update.maxMints < 1 || update.maxMints > 10_000) {
+        throw new Error('maxMints must be at least 1 (integer, max 10000)');
       }
       this.config.maxMints = update.maxMints;
     }
     if (update.windowMs !== undefined) {
-      if (update.windowMs < 1000) {
-        throw new Error('windowMs must be at least 1000');
+      if (!Number.isInteger(update.windowMs) || update.windowMs < 1000 || update.windowMs > 86_400_000) {
+        throw new Error('windowMs must be at least 1000 (integer, max 86400000)');
       }
       this.config.windowMs = update.windowMs;
     }

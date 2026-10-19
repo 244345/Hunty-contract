@@ -1,9 +1,9 @@
-use crate::storage::Storage;
+use crate::storage::{Storage, MAX_CO_CREATORS};
 use hunty_migration::{
-    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
-    UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
+    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeCancelledEvent,
+    UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, Symbol};
 
 pub use hunty_migration::MigrationReport;
 
@@ -18,40 +18,107 @@ impl HuntyCoreMigration {
         MigrationFramework::detect_version(env)
     }
 
-    pub fn initialize_schema(env: &Env, admin: &Address) {
+    pub fn initialize_schema(env: &Env) {
         MigrationFramework::init_version_on_deploy(env);
-        if UpgradeAuthorization::get_upgrade_admin(env).is_none() {
-            UpgradeAuthorization::set_upgrade_admin(env, admin);
-        }
+    }
+
+    fn configured_admin(env: &Env) -> Option<Address> {
+        Storage::get_admin(env)
     }
 
     pub fn propose_upgrade(
         env: &Env,
         admin: &Address,
         target_version: u32,
+        wasm_hash: BytesN<32>,
     ) -> Result<UpgradeProposal, UpgradeAuthError> {
-        UpgradeAuthorization::require_admin(
-            env,
-            admin,
-            UpgradeAuthorization::get_upgrade_admin(env),
-        )?;
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
         let now = env.ledger().timestamp();
-        let proposal = UpgradeAuthorization::propose_upgrade(env, admin, target_version, now);
-        Ok(proposal)
+        UpgradeAuthorization::propose_upgrade(env, admin, target_version, wasm_hash, now)
     }
 
+    pub fn upgrade(
+        env: &Env,
+        admin: &Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::validate_upgrade(env, &new_wasm_hash, now)?;
+        let from_version = MigrationFramework::detect_version(env);
+        let to_version = proposal.target_version;
+
+        // Run pending data-migration steps before swapping WASM so that
+        // the stored data matches the layout expected by the new code.
+        if from_version < to_version {
+            MigrationFramework::save_rollback_point(env, from_version);
+            let mut current = from_version;
+            while current < to_version {
+                match current {
+                    0 => {
+                        Self::migrate_v0_to_v1(env);
+                        current = 1;
+                    }
+                    1 => {
+                        Self::migrate_v1_to_v2(env);
+                        current = 2;
+                    }
+                    2 => {
+                        Self::migrate_v2_to_v3(env);
+                        current = 3;
+                    }
+                    3 => {
+                        Self::migrate_v3_to_v4(env);
+                        current = 4;
+                    }
+                    4 => {
+                        Self::migrate_v4_to_v5(env);
+                        current = 5;
+                    }
+                    _ => {
+                        return Err(UpgradeAuthError::VersionMismatch);
+                    }
+                }
+            }
+            MigrationFramework::set_version(env, current);
+        }
+
+        UpgradeAuthorization::finalize_upgrade_run(
+            env,
+            admin,
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+        );
+
+        let event = Self::upgrade_executed_event(
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+            admin.clone(),
+        );
+        env.events()
+            .publish(Self::upgrade_executed_topic(env), event);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    /// Sets the upgrade timelock to `delay_seconds`.
+    ///
+    /// Rejects values below `MIN_UPGRADE_TIMELOCK_SECONDS` (24 hours). Timelock
+    /// reductions only take effect after the current timelock elapses, so users
+    /// keep the warning window they were promised.
     pub fn set_upgrade_timelock(
         env: &Env,
         admin: &Address,
         delay_seconds: u64,
     ) -> Result<(), UpgradeAuthError> {
-        UpgradeAuthorization::require_admin(
-            env,
-            admin,
-            UpgradeAuthorization::get_upgrade_admin(env),
-        )?;
-        UpgradeAuthorization::set_timelock_seconds(env, delay_seconds);
-        Ok(())
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
+        let now = env.ledger().timestamp();
+        UpgradeAuthorization::set_timelock_seconds(env, now, delay_seconds)
     }
 
     pub fn get_upgrade_proposal(env: &Env) -> Option<UpgradeProposal> {
@@ -60,6 +127,12 @@ impl HuntyCoreMigration {
 
     pub fn get_upgrade_timelock(env: &Env) -> u64 {
         UpgradeAuthorization::get_timelock_seconds(env)
+    }
+
+    /// Returns the pending timelock reduction, if one is queued.
+    #[allow(dead_code)]
+    pub fn get_pending_timelock_change(env: &Env) -> Option<hunty_migration::TimelockChange> {
+        UpgradeAuthorization::get_pending_timelock_change(env)
     }
 
     pub fn get_upgrade_history(
@@ -81,7 +154,7 @@ impl HuntyCoreMigration {
         UpgradeAuthorization::prepare_migration_run(
             env,
             admin,
-            UpgradeAuthorization::get_upgrade_admin(env),
+            Self::configured_admin(env),
             target_version,
             dry_run,
             now,
@@ -114,6 +187,12 @@ impl HuntyCoreMigration {
                         Self::migrate_v0_to_v1(env);
                     }
                     current = 1;
+                }
+                1 => {
+                    if !dry_run {
+                        Self::migrate_v1_to_v2(env);
+                    }
+                    current = 2;
                 }
                 // v1 -> v2: not yet implemented.
                 // Add the arm here (and the migrate_v1_to_v2 fn below) once
@@ -161,19 +240,33 @@ impl HuntyCoreMigration {
         ))
     }
 
+    /// Returns true if any data-transforming migration step has run since the
+    /// last rollback point was saved. Rollback is refused in that case because
+    /// down-migrations are not implemented.
+    fn has_data_steps(from_version: u32, to_version: u32) -> bool {
+        to_version > from_version
+    }
+
     /// Restores the schema version saved before the last migration.
     pub fn rollback_migration(
         env: &Env,
         admin: &Address,
     ) -> Result<MigrationReport, UpgradeAuthError> {
-        UpgradeAuthorization::require_admin(
-            env,
-            admin,
-            UpgradeAuthorization::get_upgrade_admin(env),
-        )?;
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
         let previous =
-            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoProposal)?;
+            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoRollbackPoint)?;
         let current = MigrationFramework::detect_version(env);
+        if Self::has_data_steps(previous, current) {
+            return Ok(MigrationFramework::build_report(
+                env,
+                current,
+                previous,
+                0,
+                false,
+                false,
+                "rollback refused: data migrations cannot be reverted",
+            ));
+        }
         MigrationFramework::set_version(env, previous);
         MigrationFramework::clear_rollback(env);
         Ok(MigrationFramework::build_report(
@@ -190,6 +283,7 @@ impl HuntyCoreMigration {
     pub fn upgrade_proposed_event(proposal: &UpgradeProposal) -> UpgradeProposedEvent {
         UpgradeProposedEvent {
             target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
             proposed_at: proposal.proposed_at,
             effective_at: proposal.effective_at,
             proposer: proposal.proposer.clone(),
@@ -199,15 +293,39 @@ impl HuntyCoreMigration {
     pub fn upgrade_executed_event(
         from_version: u32,
         to_version: u32,
+        wasm_hash: &BytesN<32>,
         executed_at: u64,
         executor: Address,
     ) -> UpgradeExecutedEvent {
         UpgradeExecutedEvent {
             from_version,
             to_version,
+            wasm_hash: wasm_hash.clone(),
             executed_at,
             executor,
         }
+    }
+
+    pub fn migration_executed_event(
+        from_version: u32,
+        to_version: u32,
+        executed_at: u64,
+        executor: Address,
+    ) -> MigrationExecutedEvent {
+        MigrationExecutedEvent {
+            from_version,
+            to_version,
+            executed_at,
+            executor,
+        }
+    }
+
+    pub fn get_migration_history(
+        env: &Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<MigrationHistoryEntry> {
+        UpgradeAuthorization::get_migration_history(env, offset, limit)
     }
 
     pub fn upgrade_proposed_topic(env: &Env) -> (Symbol,) {
@@ -216,6 +334,38 @@ impl HuntyCoreMigration {
 
     pub fn upgrade_executed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeExecuted"),)
+    }
+
+    pub fn upgrade_cancelled_topic(env: &Env) -> (Symbol,) {
+        (Symbol::new(env, "UpgradeCancelled"),)
+    }
+
+    pub fn upgrade_cancelled_event(
+        proposal: &UpgradeProposal,
+        cancelled_by: Address,
+        cancelled_at: u64,
+    ) -> UpgradeCancelledEvent {
+        UpgradeCancelledEvent {
+            cancelled_at,
+            proposer: proposal.proposer.clone(),
+            cancelled_by,
+            target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
+        }
+    }
+
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(env, admin, Self::configured_admin(env))?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::cancel_upgrade(env, admin, Self::configured_admin(env))?;
+        env.events().publish(
+            Self::upgrade_cancelled_topic(env),
+            Self::upgrade_cancelled_event(&proposal, admin.clone(), now),
+        );
+        Ok(proposal)
     }
 
     /// v0 -> v1: ensure `required_clues` is populated for legacy hunts.
@@ -231,13 +381,10 @@ impl HuntyCoreMigration {
         }
     }
 
-    // v1 -> v2: NOT YET IMPLEMENTED.
-    // Define migrate_v1_to_v2(env: &Env) here and add the corresponding
-    // `1 => { ... current = 2; }` arm to run_migration once the new
-    // storage layout and transformation logic are ready.
-    // Until then this step intentionally does not exist so run_migration
-    // rejects any attempt to target version 2 (or higher) rather than
-    // silently bumping the stored schema counter without touching any data.
+    /// v1 -> v2: no-op compatibility stub. This storage schema is still not
+    /// migrated in-place, but the version gate must not fail for callers that
+    /// attempt to advance through the current migration chain.
+    fn migrate_v1_to_v2(_env: &Env) {}
 
     /// v2 -> v3: populate required clue IDs list for on-demand clue loading.
     /// Iterates all hunts and saves the list of required clue IDs in separate storage,
@@ -287,6 +434,22 @@ impl HuntyCoreMigration {
                 let clue = all_clues.get(i).unwrap();
                 Storage::save_clue(env, hunt_id, &clue);
             }
+        }
+    }
+
+    /// v4 -> v5: move co-creator lists from instance storage to persistent
+    /// storage and enforce the per-hunt cap.
+    fn migrate_v4_to_v5(env: &Env) {
+        let hunt_count = Storage::get_hunt_counter(env);
+        for hunt_id in 1..=hunt_count {
+            if Storage::get_hunt(env, hunt_id).is_none() {
+                continue;
+            }
+            let mut co_creators = Storage::get_co_creators(env, hunt_id);
+            if co_creators.len() > MAX_CO_CREATORS {
+                co_creators = co_creators.slice(0..MAX_CO_CREATORS);
+            }
+            Storage::set_co_creators(env, hunt_id, &co_creators);
         }
     }
 }

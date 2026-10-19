@@ -33,6 +33,11 @@ const MAX_MIGRATED_CLUE_INDEX_ENTRIES: u32 = 100;
 
 pub(crate) const MAX_VIEW_ONLY_ENTRIES: u32 = 200;
 
+/// Maximum number of co-creators per hunt. Keeps the co-creator list bounded
+/// so `get_co_creators` and `is_authorized_creator_or_co_creator` stay within
+/// the invocation budget as the list grows.
+pub(crate) const MAX_CO_CREATORS: u32 = 200;
+
 #[contracttype]
 #[derive(Clone, Debug)]
 
@@ -192,6 +197,106 @@ impl Storage {
 
     const TEAM_PROGRESS_KEY: soroban_sdk::Symbol = symbol_short!("TMPR");
 
+    const RATE_LIMIT_KEY: soroban_sdk::Symbol = symbol_short!("HRATE");
+
+    /// Per-hunt running counter: number of players who have completed the hunt.
+    /// Keyed as `(HCMPL, hunt_id)` to avoid collisions with `PLCT` (registration count).
+    const HUNT_COMPLETED_KEY: soroban_sdk::Symbol = symbol_short!("HCMPL");
+
+    /// Per-hunt running sum: cumulative `total_score` across all registered players.
+    /// Updated at registration (delta = 0) and on every clue completion.
+    /// Keyed as `(HSCRS, hunt_id)`.
+    const HUNT_SCORE_SUM_KEY: soroban_sdk::Symbol = symbol_short!("HSCRS");
+
+    // ========== Hunt Statistics Counters ==========
+
+    fn hunt_completed_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
+        (Self::HUNT_COMPLETED_KEY, hunt_id)
+    }
+
+    fn hunt_score_sum_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
+        (Self::HUNT_SCORE_SUM_KEY, hunt_id)
+    }
+
+    /// Returns the number of players who have completed this hunt.
+    /// O(1) — reads a single persistent counter.
+    pub fn get_hunt_completed_count(env: &Env, hunt_id: u64) -> u32 {
+        let key = Self::hunt_completed_key(hunt_id);
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// Atomically increments the per-hunt completion counter.
+    /// Called once per player when `is_completed` transitions to `true`.
+    pub fn increment_hunt_completed_count(env: &Env, hunt_id: u64) {
+        let key = Self::hunt_completed_key(hunt_id);
+        let prev: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&key, &prev.saturating_add(1));
+        extend_ttl(env, &key, TtlPolicy::Active);
+    }
+
+    /// Returns the cumulative score sum for all registered players in this hunt.
+    /// O(1) — reads a single persistent counter.
+    pub fn get_hunt_score_sum(env: &Env, hunt_id: u64) -> u64 {
+        let key = Self::hunt_score_sum_key(hunt_id);
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// Adds `delta` to the per-hunt cumulative score sum.
+    /// Called on every successful clue completion with the points just earned.
+    pub fn add_hunt_score(env: &Env, hunt_id: u64, delta: u32) {
+        if delta == 0 {
+            return;
+        }
+        let key = Self::hunt_score_sum_key(hunt_id);
+        let prev: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&key, &prev.saturating_add(delta as u64));
+        extend_ttl(env, &key, TtlPolicy::Active);
+    }
+
+    /// Returns the namespaced persistent storage key for a creator's daily
+    /// rate-limit counter. Using a tuple key keeps the counter from colliding
+    /// with any other feature that keys persistent data by a bare `Address`.
+    pub fn rate_limit_key(_env: &Env, creator: &Address) -> (soroban_sdk::Symbol, Address) {
+        (Self::RATE_LIMIT_KEY, creator.clone())
+    }
+
+    /// Reads the creator's daily rate-limit counter, migrating a legacy entry
+    /// stored under the bare `Address` key if one exists.
+    pub fn get_rate_limit(env: &Env, creator: &Address) -> Option<CreatorDailyHuntCount> {
+        let key = Self::rate_limit_key(env, creator);
+
+        if let Some(value) = env.storage().persistent().get(&key) {
+            return Some(value);
+        }
+
+        // Migrate a legacy entry stored under the bare creator Address.
+        if let Some(legacy) = env.storage().persistent().get(creator) {
+            env.storage().persistent().set(&key, &legacy);
+
+            env.storage().persistent().remove(creator);
+
+            extend_ttl(env, &key, TtlPolicy::Default);
+
+            return Some(legacy);
+        }
+
+        None
+    }
+
+    /// Persists the creator's daily rate-limit counter under the namespaced
+    /// key and extends its TTL so the entry cannot expire mid-day.
+    pub fn set_rate_limit(env: &Env, creator: &Address, value: &CreatorDailyHuntCount) {
+        let key = Self::rate_limit_key(env, creator);
+
+        env.storage().persistent().set(&key, value);
+
+        extend_ttl(env, &key, TtlPolicy::Default);
+    }
+
     // Pause functions (granular: registrations, answers, rewards)
 
     pub fn set_pause_registrations(env: &Env, paused: bool) {
@@ -322,6 +427,17 @@ impl Storage {
 
     /// * `Some(Hunt)` if the hunt exists, `None` otherwise
 
+    ///
+    /// Returns the record with `invite_code_hash` intact. This is
+    /// contract-internal state: the hash is salted only with the public hunt_id,
+    /// so exposing it would let anyone brute-force short human-chosen invite
+    /// codes offline. Public entrypoints returning a `Hunt` must call
+    /// `sanitize_hunt_for_public` on the result.
+    ///
+    /// The hash is deliberately not stripped here. Most setters read-modify-write
+    /// the whole `Hunt`; clearing it on read would silently drop the configured
+    /// invite code on any unrelated field update, leaving a private hunt that no
+    /// one can join.
     pub fn get_hunt(env: &Env, hunt_id: u64) -> Option<Hunt> {
         let key = Self::hunt_key(hunt_id);
 
@@ -443,6 +559,7 @@ impl Storage {
                     invite_code_hash: None,
 
                     remaining_slots: 0,
+                    leaderboard_visibility: crate::types::LeaderboardVisibility::Public,
                 })
         };
 
@@ -535,6 +652,15 @@ impl Storage {
 
     pub fn get_hunt_or_error(env: &Env, hunt_id: u64) -> Result<Hunt, HuntError> {
         Self::get_hunt(env, hunt_id).ok_or(HuntError::HuntNotFound)
+    }
+
+    /// Returns a sanitized copy of a hunt suitable for public consumption.
+    /// Strips `invite_code_hash` so it can never leak through `get_hunt_info`,
+    /// `list_hunts`, `search_hunts`, or any other read path.
+    pub fn sanitize_hunt_for_public(hunt: &Hunt) -> Hunt {
+        let mut sanitized = hunt.clone();
+        sanitized.invite_code_hash = None;
+        sanitized
     }
 
     // ========== Hunt Cache Functions (instance storage) ==========
@@ -848,16 +974,11 @@ impl Storage {
 
     /// * `progress` - The PlayerProgress struct to store
 
-    pub fn save_player_progress(env: &Env, progress: &PlayerProgress) {
+    pub fn save_player_progress(env: &Env, progress: &PlayerProgress, activated_at: u64) {
         // Store the progress with composite key (hunt_id + player address),
-
         // in compact form (key fields player/hunt_id are not duplicated).
 
         let key = Self::progress_key(progress.hunt_id, &progress.player);
-
-        let activated_at = Self::get_hunt(env, progress.hunt_id)
-            .map(|h| h.activated_at)
-            .unwrap_or(0);
 
         env.storage()
             .persistent()
@@ -1023,6 +1144,46 @@ impl Storage {
             if let Some(player) = player_addresses.get(i) {
                 if let Some(progress) = Self::get_player_progress(env, hunt_id, &player) {
                     progress_list.push_back(progress);
+                }
+            }
+        }
+
+        progress_list
+    }
+
+    /// Returns up to `limit` completed, unclaimed player progress records for a
+    /// hunt, sourced from the leaderboard index instead of the full player
+    /// registration list.
+    ///
+    /// The leaderboard index only contains players who have completed the hunt,
+    /// so this avoids loading progress for every registered player. Callers
+    /// that need to select winners (e.g. `close_hunt`) should use this instead
+    /// of [`Self::get_hunt_players`] to stay within the invocation budget.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `hunt_id` - The hunt to get completed players for
+    /// * `limit` - Maximum number of entries to return (0 means no limit)
+    ///
+    /// # Returns
+    /// A Vec of completed, unclaimed PlayerProgress entries, capped at `limit`.
+    pub fn get_completed_hunt_players(env: &Env, hunt_id: u64, limit: u32) -> Vec<PlayerProgress> {
+        let entries = Self::get_leaderboard_index(env, hunt_id);
+
+        let mut progress_list = Vec::new(env);
+
+        let cap = if limit == 0 {
+            entries.len()
+        } else {
+            core::cmp::min(limit, entries.len())
+        };
+
+        for i in 0..cap {
+            if let Some(entry) = entries.get(i) {
+                if let Some(progress) = Self::get_player_progress(env, hunt_id, &entry.player) {
+                    if progress.is_completed && !progress.reward_claimed {
+                        progress_list.push_back(progress);
+                    }
                 }
             }
         }
@@ -1657,6 +1818,45 @@ impl Storage {
             })
     }
 
+    /// Returns up to `count` player addresses starting at `start_index` from
+    /// the persistent registration index for a hunt.
+    ///
+    /// Only the requested slice of the index is read, so paging callers never
+    /// have to load the whole player list (keeping them O(window) instead of
+    /// O(total registrations)). Out-of-range requests return an empty vector.
+    pub fn get_player_addresses_range(
+        env: &Env,
+        hunt_id: u64,
+        start_index: u32,
+        count: u32,
+    ) -> Vec<Address> {
+        let mut addrs = Vec::new(env);
+
+        if count == 0 {
+            return addrs;
+        }
+
+        let total = Self::get_player_count(env, hunt_id);
+
+        if start_index >= total {
+            return addrs;
+        }
+
+        let end = core::cmp::min(start_index.saturating_add(count), total);
+
+        for i in start_index..end {
+            let entry_key = Self::player_entry_key(hunt_id, i);
+
+            if let Some(addr) = env.storage().persistent().get::<_, Address>(&entry_key) {
+                Self::touch_persistent_index(env, &entry_key);
+
+                addrs.push_back(addr);
+            }
+        }
+
+        addrs
+    }
+
     pub fn get_player_addresses_for_hunt(env: &Env, hunt_id: u64) -> Vec<Address> {
         Self::migrate_player_index_from_instance(env, hunt_id);
 
@@ -1897,7 +2097,9 @@ impl Storage {
     pub fn increment_clue_attempt_count(env: &Env, hunt_id: u64, clue_id: u32, player: &Address) {
         let key = Self::clue_attempt_key(hunt_id, clue_id, player);
         let count = env.storage().persistent().get(&key).unwrap_or(0u32);
-        env.storage().persistent().set(&key, &count.saturating_add(1));
+        env.storage()
+            .persistent()
+            .set(&key, &count.saturating_add(1));
         extend_ttl(env, &key, TtlPolicy::Active);
     }
 
@@ -2581,60 +2783,101 @@ impl Storage {
         (symbol_short!("HRLCT"), creator.clone())
     }
 
-    pub fn get_creator_daily_hunt_count(env: &Env, creator: &Address, day: u64) -> u32 {
+    const HUNT_CREATION_WINDOW_SECS: u64 = 24 * 60 * 60;
+
+    fn read_creator_hunt_window(env: &Env, creator: &Address) -> Option<CreatorDailyHuntCount> {
         let key = Self::creator_daily_count_key(creator);
+        env.storage().persistent().get(&key)
+    }
 
-        let stored: Option<CreatorDailyHuntCount> = env.storage().persistent().get(&key);
-
-        match stored {
+    pub fn get_creator_daily_hunt_count(env: &Env, creator: &Address, day: u64) -> u32 {
+        match Self::read_creator_hunt_window(env, creator) {
             Some(entry) if entry.day == day => entry.count,
-
             _ => 0,
         }
     }
 
     pub fn set_creator_daily_hunt_count(env: &Env, creator: &Address, day: u64, count: u32) {
         let key = Self::creator_daily_count_key(creator);
-
         let entry = CreatorDailyHuntCount { day, count };
-
         env.storage().persistent().set(&key, &entry);
     }
 
     // ========== Co-Creators Storage Functions ==========
 
-    pub fn get_co_creators(env: &Env, hunt_id: u64) -> Vec<Address> {
-        let key = (symbol_short!("COCRTR"), hunt_id);
-
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(env))
+    fn co_creators_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
+        (symbol_short!("COCRTR"), hunt_id)
     }
 
-    pub fn add_co_creator(env: &Env, hunt_id: u64, address: &Address) {
-        let key = (symbol_short!("COCRTR"), hunt_id);
+    pub fn get_co_creators(env: &Env, hunt_id: u64) -> Vec<Address> {
+        let key = Self::co_creators_key(hunt_id);
+
+        let persistent: Option<Vec<Address>> = env.storage().persistent().get(&key);
+
+        if let Some(list) = persistent {
+            extend_ttl(env, &key, TtlPolicy::Active);
+
+            env.storage().instance().remove(&key);
+
+            return list;
+        }
+
+        // Legacy deployments kept the co-creator list in instance storage.
+        // Promote it on first read so upgrades preserve existing co-creators.
+        if let Some(list) = env.storage().instance().get::<_, Vec<Address>>(&key) {
+            env.storage().persistent().set(&key, &list);
+
+            env.storage().instance().remove(&key);
+
+            extend_ttl(env, &key, TtlPolicy::Active);
+
+            return list;
+        }
+
+        Vec::new(env)
+    }
+
+    pub fn set_co_creators(env: &Env, hunt_id: u64, list: &Vec<Address>) {
+        let key = Self::co_creators_key(hunt_id);
+        env.storage().persistent().set(&key, list);
+        extend_ttl(env, &key, TtlPolicy::Active);
+    }
+
+    pub fn add_co_creator(
+        env: &Env,
+        hunt_id: u64,
+        address: &Address,
+    ) -> Result<(), crate::errors::HuntError> {
+        let key = Self::co_creators_key(hunt_id);
 
         let mut list = Self::get_co_creators(env, hunt_id);
 
         if list.first_index_of(address).is_none() {
+            if list.len() >= MAX_CO_CREATORS {
+                return Err(crate::errors::HuntError::HuntFull);
+            }
+
             list.push_back(address.clone());
 
-            env.storage().instance().set(&key, &list);
+            env.storage().persistent().set(&key, &list);
 
-            env.storage().instance().extend_ttl(518400, 518400);
+            extend_ttl(env, &key, TtlPolicy::Active);
         }
+
+        Ok(())
     }
 
     pub fn remove_co_creator(env: &Env, hunt_id: u64, address: &Address) {
-        let key = (symbol_short!("COCRTR"), hunt_id);
+        let key = Self::co_creators_key(hunt_id);
 
         let mut list = Self::get_co_creators(env, hunt_id);
 
         if let Some(idx) = list.first_index_of(address) {
             list.remove(idx);
 
-            env.storage().instance().set(&key, &list);
+            env.storage().persistent().set(&key, &list);
+
+            extend_ttl(env, &key, TtlPolicy::Active);
         }
     }
 
@@ -3116,11 +3359,13 @@ mod index_tier_tests {
             )
             .unwrap();
 
-            HuntyCore::activate_hunt(env.clone(), id, creator.clone()).unwrap();
-
-            HuntyCore::register_player(env.clone(), id, player.clone()).unwrap();
-
             id
+        });
+
+        env.as_contract(&contract_id, || {
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+
+            HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
         });
 
         (contract_id, hunt_id, player)
@@ -3148,17 +3393,19 @@ mod index_tier_tests {
 
             let player_marker = Storage::player_exists_key(hunt_id, &player);
 
-            for key in [clue_entry, clue_count, clue_marker] {
+            for key in [clue_entry, clue_marker] {
                 assert!(env.storage().persistent().has(&key));
-
                 assert!(!env.storage().instance().has(&key));
             }
+            assert!(env.storage().persistent().has(&clue_count));
+            assert!(!env.storage().instance().has(&clue_count));
 
-            for key in [player_entry, player_count, player_marker] {
-                assert!(env.storage().persistent().has(&key));
-
-                assert!(!env.storage().instance().has(&key));
-            }
+            assert!(env.storage().persistent().has(&player_entry));
+            assert!(!env.storage().instance().has(&player_entry));
+            assert!(env.storage().persistent().has(&player_marker));
+            assert!(!env.storage().instance().has(&player_marker));
+            assert!(env.storage().persistent().has(&player_count));
+            assert!(!env.storage().instance().has(&player_count));
         });
     }
 

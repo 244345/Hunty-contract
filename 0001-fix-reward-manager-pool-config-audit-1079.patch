@@ -1,0 +1,443 @@
+From 6c7a3087b560a213a323bdd4af3e7f5b7c7364f9 Mon Sep 17 00:00:00 2001
+From: B3rnard601 <B3rnard601@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 10:15:28 +0000
+Subject: [PATCH] fix(reward-manager): emit events and audit entries from pool
+ config setters (#1079)
+
+Every creator-only pool setter now appends a PoolAuditEntry and, where it
+was previously silent, publishes an event with the old and new values.
+Adds append-only PoolOperation variants 8-17. add_delegate/remove_delegate
+record nothing when they change nothing.
+---
+ CHANGELOG.md                          |   1 +
+ contracts/reward-manager/src/lib.rs   | 119 +++++++++++++++++++-
+ contracts/reward-manager/src/test.rs  | 153 ++++++++++++++++++++++++++
+ contracts/reward-manager/src/types.rs |  20 ++++
+ 4 files changed, 289 insertions(+), 4 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 317511a..911679e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ 
+ ### Fixed
+ 
++- `reward-manager`: every pool configuration setter (`update_pool_config`, `set_pool_target_amount`, `set_min_distribution_interval`, `set_distribution_mode`, `set_pool_nft_contract`, `add_delegate`, `remove_delegate`, `set_vesting_period_secs`, and the existing tier setters) now appends a `PoolAuditEntry`, and each setter that was silent now emits an event (`PL_MINAMT`, `PL_TARGET`, `PL_INTVL`, `PL_MODE`, `PL_NFT`, `DLG_ADD`, `DLG_REM`, `PL_VEST`) carrying the creator plus old and new values. Ten new `PoolOperation` variants (8-17) were added append-only; `add_delegate` / `remove_delegate` record nothing when they change nothing (#1079).
+ - `reward-manager`: `validate_pool` no longer rejects NFT-only pools: `required_amount == 0` is now valid for pools with an NFT contract and no minimum distribution amount, which hold no token balance by design (#1088). Negative amounts are still rejected for every pool type.
+ - `nft-reward`: `mint_reward_nft` (typed entrypoint) now mints soulbound (non-transferable) NFTs by default, matching `mint_reward_nft_from_map`; use the map path's explicit `"transferable"` key for transferable rewards (#1095).
+ - `hunty-core`: view-only, admin-rotation, and pause functions are exported inside `#[contractimpl]` and present in the contract ABI/spec (#604).
+diff --git a/contracts/reward-manager/src/lib.rs b/contracts/reward-manager/src/lib.rs
+index 4441a01..6b511ce 100644
+--- a/contracts/reward-manager/src/lib.rs
++++ b/contracts/reward-manager/src/lib.rs
+@@ -693,9 +693,22 @@ impl RewardManager {
+             return Err(RewardErrorCode::InvalidAmount);
+         }
+ 
++        let old_value = config.min_distribution_amount;
+         config.min_distribution_amount = min_distribution_amount;
+         Storage::set_pool_config(&env, hunt_id, &config);
+ 
++        env.events().publish(
++            (symbol_short!("PL_MINAMT"), hunt_id),
++            (creator.clone(), old_value, min_distribution_amount),
++        );
++        Self::record_config_change(
++            &env,
++            hunt_id,
++            &creator,
++            PoolOperation::UpdateMinAmount,
++            Some(min_distribution_amount),
++        );
++
+         Ok(())
+     }
+ 
+@@ -719,8 +732,21 @@ impl RewardManager {
+             return Err(RewardErrorCode::InvalidAmount);
+         }
+ 
++        let old_value = config.target_amount;
+         config.target_amount = target_amount;
+         Storage::set_pool_config(&env, hunt_id, &config);
++
++        env.events().publish(
++            (symbol_short!("PL_TARGET"), hunt_id),
++            (creator.clone(), old_value, target_amount),
++        );
++        Self::record_config_change(
++            &env,
++            hunt_id,
++            &creator,
++            PoolOperation::SetTargetAmount,
++            Some(target_amount),
++        );
+         Ok(())
+     }
+ 
+@@ -740,8 +766,21 @@ impl RewardManager {
+             return Err(RewardErrorCode::Unauthorized);
+         }
+ 
++        let old_value = config.min_distribution_interval_secs;
+         config.min_distribution_interval_secs = min_distribution_interval_secs;
+         Storage::set_pool_config(&env, hunt_id, &config);
++
++        env.events().publish(
++            (symbol_short!("PL_INTVL"), hunt_id),
++            (creator.clone(), old_value, min_distribution_interval_secs),
++        );
++        Self::record_config_change(
++            &env,
++            hunt_id,
++            &creator,
++            PoolOperation::SetDistributionInterval,
++            None,
++        );
+         Ok(())
+     }
+ 
+@@ -761,8 +800,21 @@ impl RewardManager {
+             return Err(RewardErrorCode::Unauthorized);
+         }
+ 
++        let old_value = config.distribution_mode;
+         config.distribution_mode = mode;
+         Storage::set_pool_config(&env, hunt_id, &config);
++
++        env.events().publish(
++            (symbol_short!("PL_MODE"), hunt_id),
++            (creator.clone(), old_value, mode),
++        );
++        Self::record_config_change(
++            &env,
++            hunt_id,
++            &creator,
++            PoolOperation::SetDistributionMode,
++            None,
++        );
+         Ok(())
+     }
+ 
+@@ -821,6 +873,7 @@ impl RewardManager {
+             (symbol_short!("PL_TIERS"), hunt_id),
+             (creator.clone(), tiers_len),
+         );
++        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetTimeTiers, None);
+ 
+         Ok(())
+     }
+@@ -860,8 +913,11 @@ impl RewardManager {
+         config.rank_based_tiers = rank_based_tiers;
+         Storage::set_pool_config(&env, hunt_id, &config);
+ 
+-        env.events()
+-            .publish((symbol_short!("PL_RTIERS"), hunt_id), (creator, tier_count));
++        env.events().publish(
++            (symbol_short!("PL_RTIERS"), hunt_id),
++            (creator.clone(), tier_count),
++        );
++        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetRankTiers, None);
+ 
+         Ok(())
+     }
+@@ -892,9 +948,16 @@ impl RewardManager {
+             return Err(RewardErrorCode::Unauthorized);
+         }
+ 
+-        config.nft_contract = nft_contract;
++        let old_value = config.nft_contract.clone();
++        config.nft_contract = nft_contract.clone();
+         Storage::set_pool_config(&env, hunt_id, &config);
+ 
++        env.events().publish(
++            (symbol_short!("PL_NFT"), hunt_id),
++            (creator.clone(), old_value, nft_contract),
++        );
++        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetNftContract, None);
++
+         Ok(())
+     }
+ 
+@@ -916,8 +979,13 @@ impl RewardManager {
+         }
+ 
+         if !Self::is_delegate(&config, &delegate) {
+-            config.delegates.push_back(delegate);
++            config.delegates.push_back(delegate.clone());
+             Storage::set_pool_config(&env, hunt_id, &config);
++
++            // Only a real change is recorded; re-adding an existing delegate is a no-op.
++            env.events()
++                .publish((symbol_short!("DLG_ADD"), hunt_id), (creator.clone(), delegate));
++            Self::record_config_change(&env, hunt_id, &creator, PoolOperation::AddDelegate, None);
+         }
+ 
+         Ok(())
+@@ -947,9 +1015,23 @@ impl RewardManager {
+                 updated.push_back(existing);
+             }
+         }
++        let removed = updated.len() != config.delegates.len();
+         config.delegates = updated;
+         Storage::set_pool_config(&env, hunt_id, &config);
+ 
++        // Only a real change is recorded; removing a non-delegate is a no-op.
++        if removed {
++            env.events()
++                .publish((symbol_short!("DLG_REM"), hunt_id), (creator.clone(), delegate));
++            Self::record_config_change(
++                &env,
++                hunt_id,
++                &creator,
++                PoolOperation::RemoveDelegate,
++                None,
++            );
++        }
++
+         Ok(())
+     }
+ 
+@@ -962,6 +1044,28 @@ impl RewardManager {
+         Storage::get_pool_config(&env, hunt_id)
+     }
+ 
++    /// Appends a pool-config change to the pool audit log. Shared by every
++    /// creator-only setter so each one leaves the same kind of trail as
++    /// create/fund/freeze/withdraw do.
++    fn record_config_change(
++        env: &Env,
++        hunt_id: u64,
++        actor: &Address,
++        operation: PoolOperation,
++        amount: Option<i128>,
++    ) {
++        Storage::append_audit_entry(
++            env,
++            hunt_id,
++            PoolAuditEntry {
++                actor: actor.clone(),
++                operation,
++                timestamp: env.ledger().timestamp(),
++                amount,
++            },
++        );
++    }
++
+     /// Records `amount` as a contribution from `funder` toward `hunt_id`'s
+     /// pool sponsorship ledger, adding them to the pool's funder list the
+     /// first time they contribute. Shared by `fund_reward_pool` and
+@@ -2801,9 +2905,16 @@ impl RewardManager {
+             return Err(RewardErrorCode::Unauthorized);
+         }
+ 
++        let old_value = config.vesting_period_secs;
+         config.vesting_period_secs = vesting_period_secs;
+         Storage::set_pool_config(&env, hunt_id, &config);
+ 
++        env.events().publish(
++            (symbol_short!("PL_VEST"), hunt_id),
++            (creator.clone(), old_value, vesting_period_secs),
++        );
++        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetVestingPeriod, None);
++
+         Ok(())
+     }
+ 
+diff --git a/contracts/reward-manager/src/test.rs b/contracts/reward-manager/src/test.rs
+index 4ce3718..27f240b 100644
+--- a/contracts/reward-manager/src/test.rs
++++ b/contracts/reward-manager/src/test.rs
+@@ -4850,4 +4850,157 @@ mod test {
+         assert_eq!(get_balance(&env, &token_address, &player1), 50_000_000);
+         assert_eq!(get_balance(&env, &token_address, &player2), 50_000_000);
+     }
++
++    // ========== #1079: config setters write audit entries ==========
++
++    #[test]
++    fn test_config_setters_append_audit_entries() {
++        use crate::types::PoolOperation as Op;
++
++        let env = Env::default();
++        env.mock_all_auths_allowing_non_root_auth();
++        let (contract_id, token_address, _) = setup(&env);
++        let creator = Address::generate(&env);
++        let delegate = Address::generate(&env);
++        let nft = Address::generate(&env);
++
++        env.as_contract(&contract_id, || {
++            create_pool_with_token(&env, creator.clone(), 1, token_address.clone(), 0).unwrap();
++            // Entry 0 is the Create entry.
++            assert_eq!(Storage::get_pool_audit_count(&env, 1), 1);
++
++            RewardManager::update_pool_config(env.clone(), creator.clone(), 1, 100).unwrap();
++            RewardManager::set_pool_target_amount(env.clone(), creator.clone(), 1, 5_000).unwrap();
++            RewardManager::set_min_distribution_interval(env.clone(), creator.clone(), 1, 60)
++                .unwrap();
++            RewardManager::set_distribution_mode(
++                env.clone(),
++                creator.clone(),
++                1,
++                DistributionMode::Proportional,
++            )
++            .unwrap();
++            RewardManager::set_pool_nft_contract(env.clone(), creator.clone(), 1, Some(nft))
++                .unwrap();
++            RewardManager::add_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            RewardManager::remove_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            RewardManager::set_vesting_period_secs(env.clone(), creator.clone(), 1, 3_600)
++                .unwrap();
++
++            let expected = [
++                (Op::UpdateMinAmount, Some(100)),
++                (Op::SetTargetAmount, Some(5_000)),
++                (Op::SetDistributionInterval, None),
++                (Op::SetDistributionMode, None),
++                (Op::SetNftContract, None),
++                (Op::AddDelegate, None),
++                (Op::RemoveDelegate, None),
++                (Op::SetVestingPeriod, None),
++            ];
++            assert_eq!(Storage::get_pool_audit_count(&env, 1), 1 + expected.len() as u64);
++            for (i, (op, amount)) in expected.iter().enumerate() {
++                let entry = Storage::get_pool_audit_entry(&env, 1, 1 + i as u64).unwrap();
++                assert_eq!(&entry.operation, op);
++                assert_eq!(&entry.amount, amount);
++                assert_eq!(entry.actor, creator);
++            }
++        });
++    }
++
++    #[test]
++    fn test_delegate_noops_do_not_append_audit_entries() {
++        let env = Env::default();
++        env.mock_all_auths_allowing_non_root_auth();
++        let (contract_id, token_address, _) = setup(&env);
++        let creator = Address::generate(&env);
++        let delegate = Address::generate(&env);
++
++        env.as_contract(&contract_id, || {
++            create_pool_with_token(&env, creator.clone(), 1, token_address.clone(), 0).unwrap();
++            // Removing someone who is not a delegate changes nothing.
++            RewardManager::remove_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            RewardManager::add_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            // Re-adding an existing delegate changes nothing.
++            RewardManager::add_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            // Create + a single AddDelegate.
++            assert_eq!(Storage::get_pool_audit_count(&env, 1), 2);
++        });
++    }
++
++    #[test]
++    fn test_failed_config_setter_appends_nothing() {
++        let env = Env::default();
++        env.mock_all_auths_allowing_non_root_auth();
++        let (contract_id, token_address, _) = setup(&env);
++        let creator = Address::generate(&env);
++        let stranger = Address::generate(&env);
++
++        env.as_contract(&contract_id, || {
++            create_pool_with_token(&env, creator.clone(), 1, token_address.clone(), 0).unwrap();
++            assert!(RewardManager::update_pool_config(env.clone(), stranger, 1, 5).is_err());
++            assert!(RewardManager::update_pool_config(env.clone(), creator, 1, -1).is_err());
++            assert_eq!(Storage::get_pool_audit_count(&env, 1), 1);
++        });
++    }
++
++    #[test]
++    fn test_config_setters_emit_events() {
++        let env = Env::default();
++        env.mock_all_auths_allowing_non_root_auth();
++        let (contract_id, token_address, _) = setup(&env);
++        let creator = Address::generate(&env);
++        let delegate = Address::generate(&env);
++        let nft = Address::generate(&env);
++
++        env.as_contract(&contract_id, || {
++            create_pool_with_token(&env, creator.clone(), 1, token_address.clone(), 0).unwrap();
++            RewardManager::update_pool_config(env.clone(), creator.clone(), 1, 100).unwrap();
++            RewardManager::set_pool_target_amount(env.clone(), creator.clone(), 1, 5_000).unwrap();
++            RewardManager::set_min_distribution_interval(env.clone(), creator.clone(), 1, 60)
++                .unwrap();
++            RewardManager::set_distribution_mode(
++                env.clone(),
++                creator.clone(),
++                1,
++                DistributionMode::Proportional,
++            )
++            .unwrap();
++            RewardManager::set_pool_nft_contract(env.clone(), creator.clone(), 1, Some(nft))
++                .unwrap();
++            RewardManager::add_delegate(env.clone(), creator.clone(), 1, delegate.clone())
++                .unwrap();
++            RewardManager::remove_delegate(env.clone(), creator.clone(), 1, delegate).unwrap();
++            RewardManager::set_vesting_period_secs(env.clone(), creator.clone(), 1, 3_600)
++                .unwrap();
++
++            let events = all_events_legacy(&env);
++            let count_topic = |topic: Symbol| {
++                let expected: Val = topic.into_val(&env);
++                events
++                    .iter()
++                    .filter(|e| {
++                        e.1.get(0).map(|t| t.get_payload()) == Some(expected.get_payload())
++                    })
++                    .count()
++            };
++
++            for topic in [
++                symbol_short!("PL_MINAMT"),
++                symbol_short!("PL_TARGET"),
++                symbol_short!("PL_INTVL"),
++                symbol_short!("PL_MODE"),
++                symbol_short!("PL_NFT"),
++                symbol_short!("DLG_ADD"),
++                symbol_short!("DLG_REM"),
++                symbol_short!("PL_VEST"),
++            ] {
++                assert_eq!(count_topic(topic.clone()), 1, "expected one {topic:?} event");
++            }
++        });
++    }
+ }
+diff --git a/contracts/reward-manager/src/types.rs b/contracts/reward-manager/src/types.rs
+index 503e5ef..1bfc12a 100644
+--- a/contracts/reward-manager/src/types.rs
++++ b/contracts/reward-manager/src/types.rs
+@@ -218,6 +218,26 @@ pub enum PoolOperation {
+     Migrate = 6,
+     /// Unused balance was refunded to the pool creator.
+     Refund = 7,
++    /// `update_pool_config` changed `min_distribution_amount` (`amount` = new value).
++    UpdateMinAmount = 8,
++    /// `set_pool_target_amount` changed the funding target (`amount` = new value).
++    SetTargetAmount = 9,
++    /// `set_min_distribution_interval` changed the distribution cooldown.
++    SetDistributionInterval = 10,
++    /// `set_distribution_mode` switched between Fixed and Proportional.
++    SetDistributionMode = 11,
++    /// `set_pool_nft_contract` set or cleared the pool's NFT contract.
++    SetNftContract = 12,
++    /// `add_delegate` authorised a new distribution delegate.
++    AddDelegate = 13,
++    /// `remove_delegate` revoked a distribution delegate.
++    RemoveDelegate = 14,
++    /// `set_vesting_period_secs` changed the vesting period.
++    SetVestingPeriod = 15,
++    /// `set_pool_tiers` replaced the time-based tier schedule.
++    SetTimeTiers = 16,
++    /// `set_pool_rank_tiers` replaced the rank-based tier schedule.
++    SetRankTiers = 17,
+ }
+ 
+ /// Comprehensive statistics for a reward pool, returned by get_pool_statistics().
+-- 
+2.43.0
+

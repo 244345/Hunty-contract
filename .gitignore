@@ -13,8 +13,6 @@ dist/
 
 # Environment files: never commit real secrets.
 # Only `*.example` templates with placeholder values are tracked.
-.env
-.env.*
 !.env.example
 !.env.*.example
 
@@ -39,3 +37,4 @@ cargo_*.log
 test_out*.txt
 test_create_out*.txt
 *_diff.txt
+config.bat

@@ -1,4 +1,6 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, IntoVal, TryFromVal, Val, Vec};
+use soroban_sdk::{
+    contracttype, symbol_short, Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
+};
 
 use crate::types::{
     DistributionProof, DistributionRecord, PoolDistribution, ResolutionStatus, RewardPoolConfig,
@@ -15,8 +17,13 @@ impl Storage {
     const PENDING_ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("PADMI");
     const XLM_TOKEN_KEY: soroban_sdk::Symbol = symbol_short!("X");
     const NFT_CONTRACT_KEY: soroban_sdk::Symbol = symbol_short!("NFTA");
-    /// Ring-buffer capacity for the per-pool audit log.
+    /// Ring-buffer capacity for per-player distribution entries.
     pub const MAX_AUDIT_ENTRIES_PER_POOL: u64 = 50;
+    /// Ring-buffer capacity for the administrative/config audit log
+    /// (creation, funding, config, freeze, refund, migrate, withdraw).
+    /// Deliberately larger than the distribution buffer so a popular hunt's
+    /// payouts can never evict its creation/funding trail (#1359).
+    pub const MAX_ADMIN_AUDIT_ENTRIES_PER_POOL: u64 = 200;
     const AUDIT_TTL_THRESHOLD: u32 = 172_800;
     const AUDIT_TTL_EXTEND_TO: u32 = 518_400;
     // Daily spending caps
@@ -36,6 +43,8 @@ impl Storage {
     const POOL_DEP_KEY: soroban_sdk::Symbol = symbol_short!("PDEP");
     const POOL_DST_KEY: soroban_sdk::Symbol = symbol_short!("PDST");
     const POOL_RFD_KEY: soroban_sdk::Symbol = symbol_short!("PRFD");
+    /// Cumulative amount drained from this pool via `migrate_pool`.
+    const POOL_MIG_KEY: soroban_sdk::Symbol = symbol_short!("PMIG");
     const POOL_DIST_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("PDCNT");
     const POOL_LAST_DIST_TS_KEY: soroban_sdk::Symbol = symbol_short!("PLDTS");
     const POOL_DISTRIBUTIONS_KEY: soroban_sdk::Symbol = symbol_short!("PLDIST");
@@ -45,6 +54,10 @@ impl Storage {
     const HAS_AUTH_KEY: soroban_sdk::Symbol = symbol_short!("HAUTH");
     const AUDIT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("AUDC");
     const AUDIT_LOG_KEY: soroban_sdk::Symbol = symbol_short!("AUDL");
+    /// Separate ring buffer for high-volume per-player distribution entries,
+    /// so payouts can never evict the administrative trail (#1359).
+    const DIST_AUDIT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("DSTAUDC");
+    const DIST_AUDIT_LOG_KEY: soroban_sdk::Symbol = symbol_short!("DSTAUDL");
     const PAUSED_KEY: soroban_sdk::Symbol = symbol_short!("PAUSE");
     // Granular pause flags (issue #628), mirroring the per-operation pauses
     // hunty-core already exposes. The global PAUSED_KEY above still overrides
@@ -56,8 +69,13 @@ impl Storage {
     const POOL_FUNDERS_KEY: soroban_sdk::Symbol = symbol_short!("PFNDRS");
     /// Per-(hunt_id, funder) cumulative amount contributed and not yet refunded.
     const POOL_FUNDER_CONTRIB_KEY: soroban_sdk::Symbol = symbol_short!("PFCONT");
+    pub const MAX_PENDING_NFT_PAGE_SIZE: u32 = 50;
 
     pub const PENDING_NFT_KEY: soroban_sdk::Symbol = symbol_short!("PNFT");
+    const LEGACY_PENDING_NFT_LIST_KEY: soroban_sdk::Symbol = symbol_short!("PNFTLST");
+    const PENDING_NFT_INDEX_KEY: soroban_sdk::Symbol = symbol_short!("PNFTIDX");
+    const PENDING_NFT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("PNFTCNT");
+    const PENDING_NFT_MIGRATED_KEY: soroban_sdk::Symbol = symbol_short!("PNFTMIG");
 
     // ========== Vesting ==========
     const VESTING_KEY: soroban_sdk::Symbol = symbol_short!("VEST");
@@ -204,7 +222,8 @@ impl Storage {
             return Vec::new(env);
         }
 
-        let end_index = core::cmp::min(offset + limit, total);
+        let bounded_limit = core::cmp::min(limit, Self::MAX_PENDING_NFT_PAGE_SIZE);
+        let end_index = core::cmp::min(offset.saturating_add(bounded_limit), total);
         let mut result = Vec::new(env);
         for i in offset..end_index {
             if let Some(distribution) = all_distributions.get(i) {
@@ -353,6 +372,19 @@ impl Storage {
 
     pub fn get_pool_total_refunded(env: &Env, hunt_id: u64) -> i128 {
         let key = Self::pool_rfd_key(hunt_id);
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// Records the cumulative amount migrated out of `hunt_id` via
+    /// `migrate_pool`. Used to satisfy the accounting identity:
+    /// `total_deposited == balance + total_distributed + total_refunded + total_migrated_out`
+    pub fn set_pool_total_migrated_out(env: &Env, hunt_id: u64, amount: i128) {
+        let key = Self::pool_mig_key(hunt_id);
+        env.storage().persistent().set(&key, &amount);
+    }
+
+    pub fn get_pool_total_migrated_out(env: &Env, hunt_id: u64) -> i128 {
+        let key = Self::pool_mig_key(hunt_id);
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
@@ -517,6 +549,10 @@ impl Storage {
         (Self::POOL_RFD_KEY, hunt_id)
     }
 
+    fn pool_mig_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
+        (Self::POOL_MIG_KEY, hunt_id)
+    }
+
     fn pool_distributions_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
         (Self::POOL_DISTRIBUTIONS_KEY, hunt_id)
     }
@@ -573,25 +609,72 @@ impl Storage {
 
     // ========== Audit Log ==========
 
-    /// Append one entry to a fixed-size ring buffer. `count` is a monotonically
-    /// increasing sequence number; the actual storage footprint is capped at
-    /// `MAX_AUDIT_ENTRIES_PER_POOL` slots.
+    /// Append one entry to the pool's audit trail. Per-player
+    /// `Distribute` entries go to a dedicated distribution ring buffer,
+    /// while administrative and config entries (create, fund, config,
+    /// freeze, refund, migrate, withdraw) go to a separate, larger admin
+    /// log — so a popular hunt's payouts can never overwrite the funding
+    /// and configuration history that matters most in a dispute (#1359).
+    ///
+    /// Unified sequence numbers are preserved: `[0, admin_count)` address
+    /// the admin log and `[admin_count, admin_count + dist_count)` address
+    /// the distribution log (each reduced modulo its own ring capacity).
     pub fn append_audit_entry(env: &Env, hunt_id: u64, entry: PoolAuditEntry) {
-        let count_key = (Self::AUDIT_COUNT_KEY, hunt_id);
-        let current_count: u64 = Self::get_pool_audit_count(env, hunt_id);
-        let index = current_count % Self::MAX_AUDIT_ENTRIES_PER_POOL;
-        let log_key = (Self::AUDIT_LOG_KEY, hunt_id, index);
-
-        env.storage().persistent().set(&log_key, &entry);
-        Self::touch_audit_key(env, &log_key);
-        env.storage()
-            .persistent()
-            .set(&count_key, &current_count.saturating_add(1));
-        Self::touch_audit_key(env, &count_key);
+        if entry.operation == PoolOperation::Distribute {
+            Self::append_ring_entry(
+                env,
+                Self::DIST_AUDIT_COUNT_KEY,
+                Self::DIST_AUDIT_LOG_KEY,
+                Self::MAX_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                entry,
+            );
+        } else {
+            Self::append_ring_entry(
+                env,
+                Self::AUDIT_COUNT_KEY,
+                Self::AUDIT_LOG_KEY,
+                Self::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                entry,
+            );
+        }
     }
 
-    /// Returns the cumulative number of entries ever appended for a pool.
+    /// Append one entry to a fixed-size ring buffer. `count` is a monotonically
+    /// increasing sequence number; the actual storage footprint is capped at
+    /// `capacity` slots.
+    fn append_ring_entry(
+        env: &Env,
+        count_key: Symbol,
+        log_key: Symbol,
+        capacity: u64,
+        hunt_id: u64,
+        entry: PoolAuditEntry,
+    ) {
+        let key = (count_key, hunt_id);
+        let current: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        let index = current % capacity;
+        let entry_key = (log_key, hunt_id, index);
+
+        env.storage().persistent().set(&entry_key, &entry);
+        Self::touch_audit_key(env, &entry_key);
+        env.storage()
+            .persistent()
+            .set(&key, &current.saturating_add(1));
+        Self::touch_audit_key(env, &key);
+    }
+
+    /// Returns the cumulative number of entries ever appended for a pool,
+    /// across both the admin and the distribution logs.
     pub fn get_pool_audit_count(env: &Env, hunt_id: u64) -> u64 {
+        Self::get_pool_admin_audit_count(env, hunt_id)
+            .saturating_add(Self::get_pool_distribution_audit_count(env, hunt_id))
+    }
+
+    /// Returns the cumulative number of administrative/config entries ever
+    /// appended for a pool.
+    pub fn get_pool_admin_audit_count(env: &Env, hunt_id: u64) -> u64 {
         let count_key = (Self::AUDIT_COUNT_KEY, hunt_id);
         let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
         if env.storage().persistent().has(&count_key) {
@@ -600,15 +683,52 @@ impl Storage {
         count
     }
 
-    /// Reads an entry by its sequence number. Sequence numbers are reduced
-    /// modulo the ring capacity for storage, so callers can page across wraps.
+    /// Returns the cumulative number of per-player distribution entries ever
+    /// appended for a pool.
+    pub fn get_pool_distribution_audit_count(env: &Env, hunt_id: u64) -> u64 {
+        let count_key = (Self::DIST_AUDIT_COUNT_KEY, hunt_id);
+        let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        if env.storage().persistent().has(&count_key) {
+            Self::touch_audit_key(env, &count_key);
+        }
+        count
+    }
+
+    /// Reads an entry by its unified sequence number (see
+    /// [`Self::append_audit_entry`]). Sequence numbers are reduced modulo
+    /// the owning ring's capacity for storage, so callers can page across
+    /// wraps. Returns `None` for evicted (overwritten) slots.
     pub fn get_pool_audit_entry(env: &Env, hunt_id: u64, index: u64) -> Option<PoolAuditEntry> {
-        let log_key = (
-            Self::AUDIT_LOG_KEY,
-            hunt_id,
-            index % Self::MAX_AUDIT_ENTRIES_PER_POOL,
-        );
-        let raw: Option<Val> = env.storage().persistent().get(&log_key);
+        let admin_count = Self::get_pool_admin_audit_count(env, hunt_id);
+        if index < admin_count {
+            Self::get_ring_entry(
+                env,
+                Self::AUDIT_LOG_KEY,
+                Self::MAX_ADMIN_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                index,
+            )
+        } else {
+            Self::get_ring_entry(
+                env,
+                Self::DIST_AUDIT_LOG_KEY,
+                Self::MAX_AUDIT_ENTRIES_PER_POOL,
+                hunt_id,
+                index.saturating_sub(admin_count),
+            )
+        }
+    }
+
+    /// Reads a ring-buffer entry by its per-log sequence number.
+    fn get_ring_entry(
+        env: &Env,
+        log_key: Symbol,
+        capacity: u64,
+        hunt_id: u64,
+        index: u64,
+    ) -> Option<PoolAuditEntry> {
+        let key = (log_key, hunt_id, index % capacity);
+        let raw: Option<Val> = env.storage().persistent().get(&key);
         let entry = raw.and_then(|value| {
             if let Ok(entry) = PoolAuditEntry::try_from_val(env, &value) {
                 return Some(entry);
@@ -652,7 +772,7 @@ impl Storage {
             })
         });
         if entry.is_some() {
-            Self::touch_audit_key(env, &log_key);
+            Self::touch_audit_key(env, &key);
         }
         entry
     }
@@ -762,8 +882,22 @@ impl Storage {
         player: &Address,
         pending: &crate::PendingNftMint,
     ) {
-        let key = Self::pending_nft_key(hunt_id, player);
-        env.storage().persistent().set(&key, pending);
+        Self::migrate_legacy_pending_nft_mints(env);
+        let storage = env.storage().persistent();
+        storage.set(&Self::pending_nft_key(hunt_id, player), pending);
+
+        let reverse_key = Self::pending_nft_reverse_key(hunt_id, player);
+        if storage.has(&reverse_key) {
+            return;
+        }
+
+        let count = Self::pending_nft_count(env);
+        storage.set(
+            &Self::pending_nft_index_entry_key(count),
+            &(hunt_id, player.clone()),
+        );
+        storage.set(&reverse_key, &count);
+        storage.set(&Self::PENDING_NFT_COUNT_KEY, &count.saturating_add(1));
     }
 
     pub fn get_pending_nft_mint(
@@ -771,17 +905,136 @@ impl Storage {
         hunt_id: u64,
         player: &Address,
     ) -> Option<crate::PendingNftMint> {
+        Self::migrate_legacy_pending_nft_mints(env);
         let key = Self::pending_nft_key(hunt_id, player);
         env.storage().persistent().get(&key)
     }
 
     pub fn remove_pending_nft_mint(env: &Env, hunt_id: u64, player: &Address) {
-        let key = Self::pending_nft_key(hunt_id, player);
-        env.storage().persistent().remove(&key);
+        Self::migrate_legacy_pending_nft_mints(env);
+        let storage = env.storage().persistent();
+        storage.remove(&Self::pending_nft_key(hunt_id, player));
+
+        let reverse_key = Self::pending_nft_reverse_key(hunt_id, player);
+        let Some(index) = storage.get::<_, u64>(&reverse_key) else {
+            return;
+        };
+
+        let count = Self::pending_nft_count(env);
+        if count == 0 {
+            storage.remove(&reverse_key);
+            return;
+        }
+
+        let last_index = count - 1;
+        if index != last_index {
+            if let Some((last_hunt_id, last_player)) =
+                storage.get::<_, (u64, Address)>(&Self::pending_nft_index_entry_key(last_index))
+            {
+                storage.set(
+                    &Self::pending_nft_index_entry_key(index),
+                    &(last_hunt_id, last_player.clone()),
+                );
+                storage.set(
+                    &Self::pending_nft_reverse_key(last_hunt_id, &last_player),
+                    &index,
+                );
+            }
+        }
+
+        storage.remove(&Self::pending_nft_index_entry_key(last_index));
+        storage.remove(&reverse_key);
+        storage.set(&Self::PENDING_NFT_COUNT_KEY, &last_index);
+    }
+
+    pub fn list_pending_nft_mints(
+        env: &Env,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<crate::PendingNftMint> {
+        Self::migrate_legacy_pending_nft_mints(env);
+        let count = Self::pending_nft_count(env);
+        let start = u64::from(offset);
+        if start >= count {
+            return Vec::new(env);
+        }
+
+        let bounded_limit = core::cmp::min(limit, Self::MAX_PENDING_NFT_PAGE_SIZE);
+        let end_index = core::cmp::min(start.saturating_add(u64::from(bounded_limit)), count);
+        let mut result = Vec::new(env);
+        for index in start..end_index {
+            if let Some((hunt_id, player)) = env
+                .storage()
+                .persistent()
+                .get::<_, (u64, Address)>(&Self::pending_nft_index_entry_key(index))
+            {
+                if let Some(entry) = Self::get_pending_nft_mint(env, hunt_id, &player) {
+                    result.push_back(entry);
+                }
+            }
+        }
+        result
     }
 
     pub fn pending_nft_key(hunt_id: u64, player: &Address) -> (soroban_sdk::Symbol, u64, Address) {
         (Self::PENDING_NFT_KEY, hunt_id, player.clone())
+    }
+
+    fn pending_nft_count(env: &Env) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&Self::PENDING_NFT_COUNT_KEY)
+            .unwrap_or(0)
+    }
+
+    fn migrate_legacy_pending_nft_mints(env: &Env) {
+        let storage = env.storage().persistent();
+        if storage
+            .get::<_, bool>(&Self::PENDING_NFT_MIGRATED_KEY)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let legacy: Vec<crate::PendingNftMint> = storage
+            .get(&Self::LEGACY_PENDING_NFT_LIST_KEY)
+            .unwrap_or_else(|| Vec::new(env));
+        for pending in legacy {
+            let reverse_key = Self::pending_nft_reverse_key(pending.hunt_id, &pending.player);
+            if storage.has(&reverse_key) {
+                storage.set(
+                    &Self::pending_nft_key(pending.hunt_id, &pending.player),
+                    &pending,
+                );
+                continue;
+            }
+
+            let count = Self::pending_nft_count(env);
+            storage.set(
+                &Self::pending_nft_key(pending.hunt_id, &pending.player),
+                &pending,
+            );
+            storage.set(
+                &Self::pending_nft_index_entry_key(count),
+                &(pending.hunt_id, pending.player.clone()),
+            );
+            storage.set(&reverse_key, &count);
+            storage.set(&Self::PENDING_NFT_COUNT_KEY, &count.saturating_add(1));
+        }
+
+        storage.remove(&Self::LEGACY_PENDING_NFT_LIST_KEY);
+        storage.set(&Self::PENDING_NFT_MIGRATED_KEY, &true);
+    }
+
+    fn pending_nft_index_entry_key(index: u64) -> (soroban_sdk::Symbol, u64) {
+        (Self::PENDING_NFT_INDEX_KEY, index)
+    }
+
+    fn pending_nft_reverse_key(
+        hunt_id: u64,
+        player: &Address,
+    ) -> (soroban_sdk::Symbol, u64, Address) {
+        (Self::PENDING_NFT_INDEX_KEY, hunt_id, player.clone())
     }
 
     // ========== Vesting Records ==========

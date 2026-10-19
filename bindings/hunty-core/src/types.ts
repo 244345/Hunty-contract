@@ -14,6 +14,17 @@ export interface HealthAlert {
 }
 
 
+export interface GcReport {
+  clues_swept: u32;
+  hunt_id: u64;
+  instance_removed: u32;
+  persistent_removed: u32;
+  players_swept: u32;
+  teams_swept: u32;
+  total_removed: u32;
+}
+
+
 export interface ContractHealth {
   active_alerts: u32;
   avg_gas_units: u64;
@@ -39,6 +50,10 @@ export interface Clue {
 }
 
 
+/**
+ * Public view of a hunt returned by get_hunt_info, list_hunts and search_hunts.
+ * Excludes the invite code hash so it cannot be brute-forced offline.
+ */
 export interface Hunt {
   activated_at: u64;
   /**
@@ -48,7 +63,7 @@ allow_partial_scoring: boolean;
   /**
  * Minimum seconds a player must wait between attempts on the same clue.
  */
-attempt_cooldown_secs: u32;
+  attempt_cooldown_secs: u32;
   categories: Array<string>;
   completed_count: u32;
   created_at: u64;
@@ -56,16 +71,12 @@ attempt_cooldown_secs: u32;
   /**
  * Default point value applied to clues with 0 points. Clue-level points override this.
  */
-default_points: u32;
+  default_points: u32;
   description: string;
   difficulty_override: Option<u32>;
   difficulty_rating: u32;
   end_time: u64;
   hunt_id: u64;
-  /**
- * SHA256 hash (salted with hunt_id) of the invite code, if configured.
- */
-invite_code_hash: Option<Buffer>;
   /**
  * When true, only players with a valid invite code may register.
  */
@@ -74,16 +85,16 @@ is_private: boolean;
   /**
  * Maximum number of players allowed to register. 0 = unlimited.
  */
-max_players: u32;
+  max_players: u32;
   max_submissions_per_minute: u32;
   /**
  * Registration cutoff timestamp. 0 = no deadline (registration open while active).
  */
-registration_deadline: u64;
+  registration_deadline: u64;
   /**
  * Dynamically recalculated on every `get_hunt` read; not meaningful when read from a raw struct literal.
  */
-remaining_slots: u32;
+  remaining_slots: u32;
   required_clues: u32;
   reward_config: RewardConfig;
   start_multiplier_bps: u32;
@@ -92,7 +103,7 @@ remaining_slots: u32;
   /**
  * When true, players may form teams and share clue progress.
  */
-team_mode: boolean;
+  team_mode: boolean;
   time_bonus_decay_secs: Option<u64>;
   time_bonus_min_bps: Option<u32>;
   time_bonus_start_bps: Option<u32>;
@@ -177,10 +188,16 @@ export interface BatchClueInput {
   /**
  * Difficulty tier (1-5, 1 = easiest, 5 = hardest). Points earned = points * difficulty.
  */
-difficulty: u32;
+  difficulty: u32;
   is_required: boolean;
   points: u32;
   question: string;
+  /**
+ * Optional weight multiplier, matching the `weight` argument of
+ * `add_clue`. `None` defaults to 1; `Some(0)` is rejected with
+ * `InvalidWeight`.
+ */
+  weight: Option<u32>;
 }
 
 
@@ -292,7 +309,7 @@ completed_at_delta: u32;
  * Bit flags for boolean fields to reduce storage footprint.
  * BIT0 (1): is_completed
  * BIT1 (2): reward_claimed
- * BIT2–BIT31: reserved for future use
+ * BIT2–BBIT31: reserved for future use
  */
 flags: u32;
   hinted_clues: Array<u32>;
