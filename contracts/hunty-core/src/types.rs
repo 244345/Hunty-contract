@@ -736,8 +736,11 @@ pub struct LeaderboardIndexEntry {
     pub is_completed: bool,
 }
 
-/// Wrapper returned by `get_hunt_leaderboard` that includes truncation
-/// information so callers can tell when the visible entries are incomplete.
+/// Wrapper returned by `get_hunt_leaderboard`.
+///
+/// `truncated` is true when the bounded ranked index is full and may have
+/// omitted additional ranked players. Registrations without a score do not
+/// make the leaderboard truncated.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaderboardResult {
