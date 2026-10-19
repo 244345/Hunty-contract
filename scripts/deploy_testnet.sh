@@ -66,7 +66,7 @@ stellar contract build
 if [ -d "target/wasm32v1-none/release" ]; then
   WASM_DIR="target/wasm32v1-none/release"
 else
-  WASM_DIR="target/wasm32-unknown-unknown/release"
+  WASM_DIR="target/wasm32v1-none/release"
 fi
 log "Using WASM directory: $WASM_DIR"
 
@@ -87,60 +87,70 @@ log "Querying native XLM token address on testnet..."
 XLM_TOKEN_ADDRESS=$(stellar contract id asset --asset native --network testnet)
 log "Native XLM token address: $XLM_TOKEN_ADDRESS"
 
-# ── Step 4: Deploy contracts (dependency order) ────────────────────────────────
+# ── Step 4: Deploy contracts with constructor args (dependency order) ──────────
 declare -A NEW_IDS
-for i in "${!CONTRACTS[@]}"; do
-  contract="${CONTRACTS[$i]}"
-  wasm_name="${WASM_NAMES[$i]}"
-  wasm_path="${WASM_DIR}/${wasm_name}.wasm"
 
-  log "Deploying $contract..."
+# Deploy hunty-core first (no constructor args)
+log "Deploying hunty-core..."
+wasm_path="${WASM_DIR}/hunty_core.wasm"
+wasm_hash=$(stellar contract upload \
+  --wasm "$wasm_path" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer)
+log "  WASM uploaded: $wasm_hash"
 
-  # Upload WASM and capture hash
-  wasm_hash=$(stellar contract upload \
-    --wasm "$wasm_path" \
-    --rpc-url "$RPC_URL" \
-    --network-passphrase "$NETWORK_PASSPHRASE" \
-    --source deployer)
+contract_id=$(stellar contract deploy \
+  --wasm-hash "$wasm_hash" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer)
+log "  Contract ID  : $contract_id"
+NEW_IDS["hunty-core"]="$contract_id"
 
-  log "  WASM uploaded: $wasm_hash"
+# Deploy reward-manager with constructor args: admin, xlm_token, hunty_core
+log "Deploying reward-manager..."
+wasm_path="${WASM_DIR}/reward_manager.wasm"
+wasm_hash=$(stellar contract upload \
+  --wasm "$wasm_path" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer)
+log "  WASM uploaded: $wasm_hash"
 
-  # Deploy contract instance
-  contract_id=$(stellar contract deploy \
-    --wasm-hash "$wasm_hash" \
-    --rpc-url "$RPC_URL" \
-    --network-passphrase "$NETWORK_PASSPHRASE" \
-    --source deployer)
-
-  log "  Contract ID  : $contract_id"
-  NEW_IDS["$contract"]="$contract_id"
-done
-
-# ── Step 5: Initialize and link contracts ─────────────────────────────────────
-log "Initializing contracts..."
-
-# 1. Initialize nft-reward
-stellar contract invoke \
-  --id "${NEW_IDS[nft-reward]}" \
+contract_id=$(stellar contract deploy \
+  --wasm-hash "$wasm_hash" \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE" \
   --source deployer \
-  -- initialize \
-  --admin "$ADMIN_ADDRESS"
-log "  nft-reward initialized."
+  -- "$ADMIN_ADDRESS" "$XLM_TOKEN_ADDRESS" "${NEW_IDS[hunty-core]}")
+log "  Contract ID  : $contract_id"
+NEW_IDS["reward-manager"]="$contract_id"
 
-# 2. Initialize reward-manager
-stellar contract invoke \
-  --id "${NEW_IDS[reward-manager]}" \
+# Deploy nft-reward with constructor args: admin, minter, max_supply, metadata
+log "Deploying nft-reward..."
+wasm_path="${WASM_DIR}/nft_reward.wasm"
+wasm_hash=$(stellar contract upload \
+  --wasm "$wasm_path" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer)
+log "  WASM uploaded: $wasm_hash"
+
+NFT_METADATA="{\"name\":\"Hunty NFT Reward\",\"description\":\"Reward NFTs for completed hunts\",\"total_supply\":0,\"creator\":\"$ADMIN_ADDRESS\"}"
+contract_id=$(stellar contract deploy \
+  --wasm-hash "$wasm_hash" \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE" \
   --source deployer \
-  -- initialize \
-  --admin "$ADMIN_ADDRESS" \
-  --xlm_token "$XLM_TOKEN_ADDRESS"
-log "  reward-manager initialized."
+  -- "$ADMIN_ADDRESS" "$ADMIN_ADDRESS" "0" "$NFT_METADATA")
+log "  Contract ID  : $contract_id"
+NEW_IDS["nft-reward"]="$contract_id"
 
-# 3. Link nft-reward to reward-manager
+# ── Step 5: Link contracts (no separate initialize needed - done in constructor) ─
+log "Linking contracts..."
+
+# 1. Link nft-reward to reward-manager
 stellar contract invoke \
   --id "${NEW_IDS[reward-manager]}" \
   --rpc-url "$RPC_URL" \
@@ -151,7 +161,18 @@ stellar contract invoke \
   --nft_contract "${NEW_IDS[nft-reward]}"
 log "  nft-reward linked to reward-manager."
 
-# 4. Initialize hunty-core
+# 2. Register reward-manager as an authorized minter on nft-reward
+stellar contract invoke \
+  --id "${NEW_IDS[nft-reward]}" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer \
+  -- add_authorized_contract \
+  --admin "$ADMIN_ADDRESS" \
+  --contract "${NEW_IDS[reward-manager]}"
+log "  reward-manager registered as minter on nft-reward."
+
+# 3. Initialize hunty-core (still needs initialize_admin)
 stellar contract invoke \
   --id "${NEW_IDS[hunty-core]}" \
   --rpc-url "$RPC_URL" \
@@ -161,7 +182,7 @@ stellar contract invoke \
   --admin "$ADMIN_ADDRESS"
 log "  hunty-core initialized."
 
-# 5. Link reward-manager to hunty-core
+# 4. Link reward-manager to hunty-core
 stellar contract invoke \
   --id "${NEW_IDS[hunty-core]}" \
   --rpc-url "$RPC_URL" \
@@ -171,6 +192,17 @@ stellar contract invoke \
   --admin "$ADMIN_ADDRESS" \
   --reward_manager "${NEW_IDS[reward-manager]}"
 log "  reward-manager linked to hunty-core."
+
+# 5. Register HuntyCore as a distributor on reward-manager
+stellar contract invoke \
+  --id "${NEW_IDS[reward-manager]}" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --source deployer \
+  -- add_authorized_contract \
+  --admin "$ADMIN_ADDRESS" \
+  --contract "${NEW_IDS[hunty-core]}"
+log "  hunty-core registered as distributor on reward-manager."
 
 # ── Step 6: Write deployed addresses ──────────────────────────────────────────
 TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -190,5 +222,8 @@ EOF
 log ""
 log "=== Testnet Deployment Complete ==="
 log "Addresses saved to $ADDRESS_FILE"
-log "To verify deployment, run:"
-log "  ./scripts/verify_deployment.sh testnet"
+
+# ── Step 7: Verify deployment ─────────────────────────────────────────────────
+log "Running deployment verification..."
+bash scripts/verify_deployment.sh testnet
+log "Deployment verified."

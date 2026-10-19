@@ -1,16 +1,18 @@
 use crate::storage::Storage;
 use crate::METADATA_SCHEMA_VERSION;
 use hunty_migration::{
-    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
-    UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
+    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeCancelledEvent,
+    UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
 };
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, Symbol};
 
 pub use hunty_migration::MigrationReport;
 
 /// Per-contract migration steps for NftReward storage layouts.
+#[allow(dead_code)]
 pub struct NftRewardMigration;
 
+#[allow(dead_code)]
 impl NftRewardMigration {
     pub fn get_schema_version(env: &Env) -> u32 {
         MigrationFramework::detect_version(env)
@@ -27,6 +29,7 @@ impl NftRewardMigration {
         env: &Env,
         admin: &Address,
         target_version: u32,
+        wasm_hash: BytesN<32>,
     ) -> Result<UpgradeProposal, UpgradeAuthError> {
         UpgradeAuthorization::require_admin(
             env,
@@ -34,10 +37,70 @@ impl NftRewardMigration {
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
         let now = env.ledger().timestamp();
-        let proposal = UpgradeAuthorization::propose_upgrade(env, admin, target_version, now);
-        Ok(proposal)
+        UpgradeAuthorization::propose_upgrade(env, admin, target_version, wasm_hash, now)
     }
 
+    pub fn upgrade(
+        env: &Env,
+        admin: &Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::validate_upgrade(env, &new_wasm_hash, now)?;
+        let from_version = MigrationFramework::detect_version(env);
+        let to_version = proposal.target_version;
+
+        // Run pending data-migration steps before swapping WASM so that
+        // the stored data matches the layout expected by the new code.
+        if from_version < to_version {
+            MigrationFramework::save_rollback_point(env, from_version);
+            let mut current = from_version;
+            while current < to_version {
+                match current {
+                    0 => {
+                        Self::migrate_v0_to_v1(env);
+                        current = 1;
+                    }
+                    _ => {
+                        return Err(UpgradeAuthError::VersionMismatch);
+                    }
+                }
+            }
+            MigrationFramework::set_version(env, current);
+        }
+
+        UpgradeAuthorization::finalize_upgrade_run(
+            env,
+            admin,
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+        );
+
+        let event = Self::upgrade_executed_event(
+            from_version,
+            to_version,
+            &new_wasm_hash,
+            now,
+            admin.clone(),
+        );
+        env.events().publish(Self::upgrade_executed_topic(env), event);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    /// Sets the upgrade timelock to `delay_seconds`.
+    ///
+    /// Rejects values below `MIN_UPGRADE_TIMELOCK_SECONDS` (24 hours). Timelock
+    /// reductions only take effect after the current timelock elapses, so users
+    /// keep the warning window they were promised.
     pub fn set_upgrade_timelock(
         env: &Env,
         admin: &Address,
@@ -48,8 +111,8 @@ impl NftRewardMigration {
             admin,
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
-        UpgradeAuthorization::set_timelock_seconds(env, delay_seconds);
-        Ok(())
+        let now = env.ledger().timestamp();
+        UpgradeAuthorization::set_timelock_seconds(env, now, delay_seconds)
     }
 
     pub fn get_upgrade_proposal(env: &Env) -> Option<UpgradeProposal> {
@@ -60,12 +123,19 @@ impl NftRewardMigration {
         UpgradeAuthorization::get_timelock_seconds(env)
     }
 
+    /// Returns the pending timelock reduction, if one is queued.
+    #[allow(dead_code)]
+    pub fn get_pending_timelock_change(env: &Env) -> Option<hunty_migration::TimelockChange> {
+        UpgradeAuthorization::get_pending_timelock_change(env)
+    }
+
     pub fn get_upgrade_history(
         env: &Env,
         offset: u32,
         limit: u32,
     ) -> soroban_sdk::Vec<UpgradeHistoryEntry> {
-        UpgradeAuthorization::get_history(env, offset, limit)
+        let bounded_limit = limit.min(50);
+        UpgradeAuthorization::get_history(env, offset, bounded_limit)
     }
 
     /// Runs migrations up to `target_version`. When `dry_run` is true, no storage writes occur.
@@ -158,7 +228,7 @@ impl NftRewardMigration {
             UpgradeAuthorization::get_upgrade_admin(env),
         )?;
         let previous =
-            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoProposal)?;
+            MigrationFramework::rollback_version(env).ok_or(UpgradeAuthError::NoRollbackPoint)?;
         let current = MigrationFramework::detect_version(env);
         MigrationFramework::set_version(env, previous);
         MigrationFramework::clear_rollback(env);
@@ -176,6 +246,7 @@ impl NftRewardMigration {
     pub fn upgrade_proposed_event(proposal: &UpgradeProposal) -> UpgradeProposedEvent {
         UpgradeProposedEvent {
             target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
             proposed_at: proposal.proposed_at,
             effective_at: proposal.effective_at,
             proposer: proposal.proposer.clone(),
@@ -185,12 +256,14 @@ impl NftRewardMigration {
     pub fn upgrade_executed_event(
         from_version: u32,
         to_version: u32,
+        wasm_hash: &BytesN<32>,
         executed_at: u64,
         executor: Address,
     ) -> UpgradeExecutedEvent {
         UpgradeExecutedEvent {
             from_version,
             to_version,
+            wasm_hash: wasm_hash.clone(),
             executed_at,
             executor,
         }
@@ -202,6 +275,46 @@ impl NftRewardMigration {
 
     pub fn upgrade_executed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeExecuted"),)
+    }
+
+    pub fn upgrade_cancelled_topic(env: &Env) -> (Symbol,) {
+        (Symbol::new(env, "UpgradeCancelled"),)
+    }
+
+    pub fn upgrade_cancelled_event(
+        proposal: &UpgradeProposal,
+        cancelled_by: Address,
+        cancelled_at: u64,
+    ) -> UpgradeCancelledEvent {
+        UpgradeCancelledEvent {
+            cancelled_at,
+            proposer: proposal.proposer.clone(),
+            cancelled_by,
+            target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
+        }
+    }
+
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::cancel_upgrade(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        env.events().publish(
+            Self::upgrade_cancelled_topic(env),
+            Self::upgrade_cancelled_event(&proposal, admin.clone(), now),
+        );
+        Ok(proposal)
     }
 
     /// v0 -> v1: retroactively set metadata version key on legacy NFTs.
