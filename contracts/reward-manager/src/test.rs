@@ -527,7 +527,7 @@ mod test {
         );
         assert_eq!(
             crate::rank_tiers_are_strictly_ascending(&zero_rank),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
 
         let non_positive = Vec::from_array(
@@ -547,7 +547,7 @@ mod test {
     fn test_rank_tier_constructor_rejects_zero_rank() {
         assert_eq!(
             RankRewardTier::new(0, 100),
-            Err(crate::TierError::NotStrictlyAscending)
+            Err(crate::TierError::InvalidRank)
         );
     }
 
@@ -3393,7 +3393,7 @@ mod test {
 
             let result = env.try_invoke_contract::<(), RewardErrorCode>(
                 &contract_id,
-                &Symbol::new(&env, "distribute_rewards_authorized"),
+                &Symbol::new(&env, "distribute_rewards"),
                 args,
             );
             assert_eq!(result, Err(Ok(RewardErrorCode::Unauthorized)));

@@ -176,7 +176,9 @@ stellar contract invoke \
   --admin "$ADMIN_ADDRESS" \
   --nft_reward_contract "${NEW_IDS[nft-reward]}"
 
-log "  reward-manager initialized."
+# NOTE: `initialize` is a legacy entry point. On constructor-deployed contracts,
+# admin/xlm_token are set at deploy time and `initialize` returns AlreadyInitialized.
+log "  reward-manager initialized (legacy)."
 
 stellar contract invoke \
   --id "${NEW_IDS[hunty-core]}" \

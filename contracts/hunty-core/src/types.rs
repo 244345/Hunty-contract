@@ -538,6 +538,21 @@ impl RewardConfig {
     }
 }
 
+/// Bounds a live-pool per-winner share so earlier winners are never
+/// shortchanged: never below the activation snapshot share, and never
+/// above the total remaining balance.
+pub fn bounded_flat_amount(
+    snapshot_per_winner: i128,
+    live_balance: i128,
+    remaining_winners: u32,
+) -> i128 {
+    if remaining_winners == 0 || live_balance <= 0 {
+        return snapshot_per_winner;
+    }
+    let live_share = live_balance / (remaining_winners as i128);
+    snapshot_per_winner.max(live_share).min(live_balance)
+}
+
 // Events
 #[contracttype]
 #[derive(Clone, Debug)]

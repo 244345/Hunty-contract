@@ -50,6 +50,18 @@ export interface NftData {
 
 
 /**
+ * Collection-level metadata for the NFT reward contract (matches the
+ * on-chain `CollectionMetadata` struct used by `initialize`).
+ */
+export interface CollectionMetadata {
+  creator: Option<string>;
+  description: string;
+  name: string;
+  total_supply: u64;
+}
+
+
+/**
  * Core display metadata for an NFT (title, description, image URI).
  * Supports off-chain storage references to keep gas costs low.
  */
@@ -216,6 +228,13 @@ export interface Client {
   get_admin: (options?: MethodOptions) => Promise<AssembledTransaction<Option<string>>>
 
   /**
+   * Construct and simulate a initialize transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Initializes the NFT reward contract with an admin address and optional max supply cap.
+   * Call this once to set the admin who can manage the contract.
+   */
+  initialize: ({_admin, _minter, _max_supply, _metadata}: {_admin: string, _minter: string, _max_supply: Option<u64>, _metadata: CollectionMetadata}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
    * Construct and simulate an is_operator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Returns true if `operator` is approved to manage all NFTs of `owner`.
    */
@@ -293,7 +312,7 @@ export interface Client {
    * # Returns
    * The unique NFT ID of the minted NFT
    */
-  mint_reward_nft: ({_minter, hunt_id, player_address, metadata}: {_minter: string, hunt_id: u64, player_address: string, metadata: NftMetadata}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  mint_reward_nft: ({_minter, _hunt_id, _owner, metadata}: {_minter: string, _hunt_id: u64, _owner: string, metadata: NftMetadata}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
    * Construct and simulate a search_nfts_by_metadata transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.

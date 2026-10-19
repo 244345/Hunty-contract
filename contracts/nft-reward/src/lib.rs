@@ -136,6 +136,12 @@ impl NftReward {
         0
     }
 
+    pub fn get_max_supply(env: Env) -> Option<u64> {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("MAXSPLY"))
+    }
+
     pub fn get_nft_metadata(_env: Env, _nft_id: u64) -> Option<NftMetadata> {
         None
     }
@@ -195,6 +201,14 @@ impl NftReward {
             migration::NftRewardMigration::upgrade_proposed_topic(&env),
             migration::NftRewardMigration::upgrade_proposed_event(&proposal),
         );
+        Ok(proposal)
+    }
+
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::NftRewardMigration::cancel_upgrade(&env, &admin)?;
         Ok(proposal)
     }
 

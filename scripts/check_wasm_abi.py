@@ -142,7 +142,6 @@ EXPECTED_FUNCTIONS: Dict[str, Set[str]] = {
         "distribute_batch_authorized",
         "distribute_proportional",
         "distribute_rewards",
-        "distribute_rewards_authorized",
         "distribute_rewards_legacy",
         "emergency_withdraw",
         "freeze_pool",

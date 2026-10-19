@@ -174,6 +174,13 @@ pub struct HuntyCore;
 #[allow(clippy::too_many_arguments)]
 #[contractimpl]
 impl HuntyCore {
+    /// Constructor - runs atomically during deployment.
+    /// Sets the admin in the same transaction as deployment so no one can
+    /// front-run `initialize_admin` and claim admin rights.
+    pub fn __constructor(env: Env, admin: Address) {
+        Storage::set_admin(&env, &admin);
+    }
+
     /// Sets the contract admin once. Subsequent calls require current admin auth via set_admin.
     pub fn initialize_admin(env: Env, admin: Address) -> Result<(), HuntErrorCode> {
         admin.require_auth();
@@ -1618,10 +1625,44 @@ impl HuntyCore {
     /// (slowest) tier's amount is used as a fallback. If no tier applies (or
     /// the pool is unreachable), this falls back to the flat
     /// `hunt.reward_config.reward_per_winner()` amount.
+    /// Resolves the flat per-winner amount from the *live* reward pool
+    /// balance at claim time, so sponsor top-ups after activation reach
+    /// later winners. The amount is bounded (see `bounded_flat_amount`)
+    /// so earlier winners can never be shortchanged: it never drops
+    /// below the activation snapshot share (a shrunken pool then fails
+    /// closed downstream instead of silently underpaying), and never
+    /// exceeds the remaining balance.
+    fn resolve_flat_amount(env: &Env, hunt: &Hunt) -> i128 {
+        let snapshot = hunt.reward_config.reward_per_winner();
+        let remaining = hunt
+            .reward_config
+            .max_winners
+            .saturating_sub(hunt.reward_config.claimed_count);
+        let reward_manager_addr = match Storage::get_reward_manager(env) {
+            Some(addr) => addr,
+            None => return snapshot,
+        };
+        let mut args: Vec<Val> = Vec::new(env);
+        args.push_back(hunt.hunt_id.into_val(env));
+        let live_balance: i128 = match env
+            .try_invoke_contract::<i128, RewardErrorCode>(
+                &reward_manager_addr,
+                &Symbol::new(env, "get_pool_balance"),
+                args,
+            )
+            .ok()
+            .and_then(|r| r.ok())
+        {
+            Some(balance) => balance,
+            None => return snapshot,
+        };
+        crate::types::bounded_flat_amount(snapshot, live_balance, remaining)
+    }
+
     fn resolve_reward_amount(env: &Env, hunt: &Hunt, progress: &PlayerProgress) -> i128 {
         let reward_manager_addr = match Storage::get_reward_manager(env) {
             Some(addr) => addr,
-            None => return hunt.reward_config.reward_per_winner(),
+            None => return Self::resolve_flat_amount(env, hunt),
         };
 
         // Fetch pool config from RewardManager. Tiers live there.
@@ -1643,7 +1684,7 @@ impl HuntyCore {
 
         let config = match pool_config.as_ref() {
             Some(config) => config,
-            None => return hunt.reward_config.reward_per_winner(),
+            None => return Self::resolve_flat_amount(env, hunt),
         };
 
         // Rank tiers take precedence over the existing time/flat policy. The
@@ -1661,7 +1702,7 @@ impl HuntyCore {
         let tiers = &config.time_based_tiers;
 
         if tiers.is_empty() {
-            return hunt.reward_config.reward_per_winner();
+            return Self::resolve_flat_amount(env, hunt);
         }
 
         // Compute elapsed time. If started_at is missing, zero selects the smallest tier.
@@ -1669,7 +1710,7 @@ impl HuntyCore {
 
         match reward_interface::resolve_tier_amount(tiers, elapsed) {
             Some(amount) if amount > 0 => amount,
-            _ => hunt.reward_config.reward_per_winner(),
+            _ => Self::resolve_flat_amount(env, hunt),
         }
     }
 
@@ -2462,7 +2503,7 @@ impl HuntyCore {
                     InvokerContractAuthEntry::Contract(SubContractInvocation {
                         context: ContractContext {
                             contract: reward_manager_addr.clone(),
-                            fn_name: Symbol::new(env, "distribute_rewards_authorized"),
+                            fn_name: Symbol::new(env, "distribute_rewards"),
                             args: auth_args,
                         },
                         sub_invocations: soroban_sdk::vec![&env],
@@ -2471,7 +2512,7 @@ impl HuntyCore {
 
                 let result = env.try_invoke_contract::<(), RewardErrorCode>(
                     &reward_manager_addr,
-                    &Symbol::new(env, "distribute_rewards_authorized"),
+                    &Symbol::new(env, "distribute_rewards"),
                     args,
                 );
                 match result {
@@ -2778,6 +2819,11 @@ impl HuntyCore {
         }
 
         hunt.is_private = is_private;
+        if !is_private {
+            // Clear the stale code so re-privatizing later cannot
+            // silently re-enable an old (possibly shared) code.
+            hunt.invite_code_hash = None;
+        }
         Storage::save_hunt(&env, &hunt);
 
         let current_time = env.ledger().timestamp();
@@ -4325,6 +4371,14 @@ impl HuntyCore {
             migration::HuntyCoreMigration::upgrade_proposed_topic(&env),
             migration::HuntyCoreMigration::upgrade_proposed_event(&proposal),
         );
+        Ok(proposal)
+    }
+
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::HuntyCoreMigration::cancel_upgrade(&env, &admin)?;
         Ok(proposal)
     }
 
