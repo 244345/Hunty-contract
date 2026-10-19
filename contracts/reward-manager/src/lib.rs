@@ -2216,14 +2216,6 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidConfig);
         }
 
-        // Write distribution record BEFORE any transfers to prevent replay in all failure modes
-        Storage::set_distribution_record(
-            &env,
-            hunt_id,
-            &player_address,
-            &DistributionRecord { xlm_amount, nft_id },
-        );
-
         // Now proceed with actual transfers and other mutations
         if reward_config.has_xlm() {
             let amount = reward_config.xlm_amount.unwrap();
@@ -2399,15 +2391,13 @@ impl RewardManager {
             }
         }
 
-        // Update the distribution record with the actual nft_id if minting succeeded
-        if let Some(nft_id_val) = nft_id {
-            if let Some(mut record) =
-                Storage::get_distribution_record(&env, hunt_id, &player_address)
-            {
-                record.nft_id = Some(nft_id_val);
-                Storage::set_distribution_record(&env, hunt_id, &player_address, &record);
-            }
-        }
+        // Write distribution record after all checks and mutations have succeeded
+        Storage::set_distribution_record(
+            &env,
+            hunt_id,
+            &player_address,
+            &DistributionRecord { xlm_amount, nft_id },
+        );
 
         let timestamp = env.ledger().timestamp();
         let proof_hash =
@@ -2949,13 +2939,11 @@ impl RewardManager {
     /// * `_nft_enabled` - Ignored; NFTs are not supported on this path
     ///
     /// # Returns
-    /// - `true` if the distribution succeeded
-    /// - `false` if the distribution failed (check the transaction result for the error code)
+    /// - `Ok(())` if the distribution succeeded
+    /// - `Err(RewardErrorCode)` if the distribution failed, causing transaction rollback
     ///
     /// # Differences from `distribute_rewards`
-    /// - Returns `bool` instead of `Result<(), RewardErrorCode>` (loses error detail)
     /// - Discards `_nft_enabled` parameter (NFTs cannot be distributed)
-    /// - No structured logging of the error
     pub fn distribute_rewards_legacy(
         env: Env,
         caller: Address,
@@ -2963,7 +2951,7 @@ impl RewardManager {
         hunt_id: u64,
         xlm_amount: i128,
         _nft_enabled: bool, // ignored: NFT not supported on legacy path
-    ) -> bool {
+    ) -> Result<(), RewardErrorCode> {
         let config = RewardConfig {
             xlm_amount: if xlm_amount > 0 {
                 Some(xlm_amount)
@@ -2979,7 +2967,7 @@ impl RewardManager {
             nft_tier: 0,
             completion_rank: 0,
         };
-        Self::distribute_rewards(env, caller, hunt_id, player, config).is_ok()
+        Self::distribute_rewards(env, caller, hunt_id, player, config)
     }
 
     /// Returns the distribution status for a hunt/player pair.
