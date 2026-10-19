@@ -103,6 +103,9 @@ mod incorrect_answer_outcome_test;
 mod invite_registration_deadline_test;
 #[cfg(test)]
 mod list_hunts_test;
+// Regression tests for #1253 (hunt categories must not keep duplicates).
+#[cfg(test)]
+mod hunt_categories_dedup_test;
 #[cfg(test)]
 #[path = "paused_status_test.rs"]
 mod paused_status_test;
@@ -1171,7 +1174,11 @@ impl HuntyCore {
         hunts
     }
 
-    /// Updates categories for a draft hunt. At most five categories are allowed.
+    /// Updates categories for a draft hunt. At most five distinct categories are allowed.
+    ///
+    /// Categories are sanitized (trimmed, validated) and duplicates are collapsed,
+    /// preserving first-seen order, so repeated entries do not use up the five
+    /// slots. Comparison is case-sensitive: `"art"` and `"Art"` are distinct.
     pub fn set_hunt_categories(
         env: Env,
         hunt_id: u64,
@@ -1490,10 +1497,6 @@ impl HuntyCore {
         env: &Env,
         categories: Vec<String>,
     ) -> Result<Vec<String>, HuntErrorCode> {
-        if categories.len() > MAX_CATEGORIES_PER_HUNT {
-            return Err(HuntErrorCode::TooManyCategories);
-        }
-
         let mut sanitized = Vec::new(env);
         for i in 0..categories.len() {
             // SAFETY: i is within the vector bounds established by the enclosing loop
@@ -1505,6 +1508,32 @@ impl HuntyCore {
                 false,
             )
             .map_err(|_| HuntErrorCode::InvalidCategory)?;
+
+            // Collapse duplicates after sanitization so that, for example,
+            // ["art", "art", " art "] is a single category. Comparison is
+            // case-sensitive, matching `hunt_has_category`/`get_hunts_by_category`,
+            // so ["art", "Art"] stays two categories. Duplicates must not
+            // consume one of the five slots.
+            let mut duplicate = false;
+            for j in 0..sanitized.len() {
+                // SAFETY: j is within the vector bounds established by the enclosing loop
+                if Self::strings_equal_bounded::<{ MAX_CATEGORY_BYTES as usize }>(
+                    &sanitized.get(j).unwrap(),
+                    &category,
+                ) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if duplicate {
+                continue;
+            }
+
+            // Only distinct categories count towards the cap, so the check has
+            // to happen after de-duplication.
+            if sanitized.len() >= MAX_CATEGORIES_PER_HUNT {
+                return Err(HuntErrorCode::TooManyCategories);
+            }
             sanitized.push_back(category);
         }
         Ok(sanitized)
