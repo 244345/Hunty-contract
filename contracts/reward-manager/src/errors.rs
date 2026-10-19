@@ -125,6 +125,8 @@ pub enum RewardErrorCode {
     // cannot be funded.
     HuntTerminal = 2041,
 
-    /// No pending admin change exists to accept.
-    NoPendingAdmin = 2042,
+    /// The pool's claim deadline has passed; distributions and vesting
+    /// claims are no longer allowed (claim_deadline != 0 and ledger
+    /// timestamp is past it).
+    ClaimDeadlineExceeded = 2042,
 }

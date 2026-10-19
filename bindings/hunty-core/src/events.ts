@@ -253,11 +253,23 @@ export interface CreatorRemovedFromBlacklistEvent {
   creator: string;
 }
 
+/**
+ * Emitted when the upgrade timelock is changed (increased or when a
+ * pending reduction is applied).
+ */
+export interface TimelockChangedEvent {
+  oldTimelock: u64;
+  newTimelock: u64;
+  changedAt: u64;
+}
 
 /**
- * Emitted when a proposed admin accepts the role.
+ * Emitted when a timelock reduction is queued and will take effect
+ * only after the current timelock has elapsed.
  */
-export interface AdminTransferredEvent {
-  new_admin: string;
-  old_admin: Option<string>;
+export interface TimelockReductionQueuedEvent {
+  oldTimelock: u64;
+  newTimelock: u64;
+  requestedAt: u64;
+  effectiveAt: u64;
 }
