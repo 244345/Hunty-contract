@@ -1457,6 +1457,9 @@ Adds multiple clues to a draft hunt in one invocation. Only the hunt creator can
 The batch is validated against the per-hunt clue cap before writing any new clues,
 so a request that would exceed the limit fails without partially adding clues.
 
+Each [`BatchClueInput`] carries the same optional `weight` as [`Self::add_clue`],
+so batch-added clues can be configured exactly like single-clue additions.
+
 **Signature:**
 
 ```rust

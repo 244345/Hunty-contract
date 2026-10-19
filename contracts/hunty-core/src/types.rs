@@ -162,6 +162,10 @@ pub struct BatchClueInput {
     /// Difficulty tier (1-5, 1 = easiest, 5 = hardest).
     /// Difficulty multiplies the clue's points: points earned = points * difficulty.
     pub difficulty: u32,
+    /// Optional weight multiplier, matching the `weight` argument of
+    /// `add_clue`. `None` defaults to 1; `Some(0)` is rejected with
+    /// `InvalidWeight`.
+    pub weight: Option<u32>,
 }
 
 /// Clue info returned by get_clue/list_clues. Excludes answer hash.

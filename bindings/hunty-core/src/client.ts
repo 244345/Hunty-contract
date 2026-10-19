@@ -68,6 +68,9 @@ export interface Client {
    * 
    * The batch is validated against the per-hunt clue cap before writing any new clues,
    * so a request that would exceed the limit fails without partially adding clues.
+   * 
+   * Each [`BatchClueInput`] carries the same optional `weight` as [`Self::add_clue`],
+   * so batch-added clues can be configured exactly like single-clue additions.
    */
   add_clues: ({hunt_id, clues}: {hunt_id: u64, clues: Array<BatchClueInput>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<u32>>>>
 
