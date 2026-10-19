@@ -1407,7 +1407,9 @@ impl RewardManager {
     ///
     /// # Errors
     /// * `PoolNotFound` - Pool has not been created yet
-    /// * `InvalidHuntStatus` - The hunt is not cancelled or ended (only when
+    /// * `InvalidHuntStatus` - The hunt is not terminal (Completed, Cancelled,
+    ///   EmergencyStopped, or Archived). An Active hunt past its end_time is rejected
+    ///   until it is cancelled or closed (only when
     ///   `set_hunty_core` has been called)
     /// * `Unauthorized` - Caller is not the pool creator
     pub fn refund_pool(env: Env, creator: Address, hunt_id: u64) -> Result<(), RewardErrorCode> {
@@ -1419,7 +1421,9 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
-        // Verify the hunt is in a terminal state (Cancelled or past end_time).
+        // Verify the hunt is in a terminal state (Completed, Cancelled,
+        // EmergencyStopped, or Archived; see `is_hunt_terminal`). An Active hunt
+        // past its end_time is NOT terminal and must be cancelled or closed first (#1287).
         // HuntyCore exposes this as `is_hunt_terminal`; when HuntyCore is not
         // configured the check is skipped and the creator is trusted.
         // A passed claim deadline also makes the pool eligible for refund so
