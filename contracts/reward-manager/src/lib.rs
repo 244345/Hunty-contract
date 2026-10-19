@@ -4005,6 +4005,7 @@ impl RewardManager {
                 migration::RewardManagerMigration::upgrade_executed_event(
                     from_version,
                     report.to_version,
+                    &BytesN::from_array(&env, &[0u8; 32]),
                     env.ledger().timestamp(),
                     admin,
                 ),
