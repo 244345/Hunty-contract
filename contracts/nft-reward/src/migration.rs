@@ -1,8 +1,8 @@
 use crate::storage::Storage;
 use crate::METADATA_SCHEMA_VERSION;
 use hunty_migration::{
-    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
-    UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
+    MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeCancelledEvent,
+    UpgradeExecutedEvent, UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
 };
 use soroban_sdk::{Address, BytesN, Env, Symbol};
 
@@ -275,6 +275,46 @@ impl NftRewardMigration {
 
     pub fn upgrade_executed_topic(env: &Env) -> (Symbol,) {
         (Symbol::new(env, "UpgradeExecuted"),)
+    }
+
+    pub fn upgrade_cancelled_topic(env: &Env) -> (Symbol,) {
+        (Symbol::new(env, "UpgradeCancelled"),)
+    }
+
+    pub fn upgrade_cancelled_event(
+        proposal: &UpgradeProposal,
+        cancelled_by: Address,
+        cancelled_at: u64,
+    ) -> UpgradeCancelledEvent {
+        UpgradeCancelledEvent {
+            cancelled_at,
+            proposer: proposal.proposer.clone(),
+            cancelled_by,
+            target_version: proposal.target_version,
+            wasm_hash: proposal.wasm_hash.clone(),
+        }
+    }
+
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        UpgradeAuthorization::require_admin(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        let now = env.ledger().timestamp();
+        let proposal = UpgradeAuthorization::cancel_upgrade(
+            env,
+            admin,
+            UpgradeAuthorization::get_upgrade_admin(env),
+        )?;
+        env.events().publish(
+            Self::upgrade_cancelled_topic(env),
+            Self::upgrade_cancelled_event(&proposal, admin.clone(), now),
+        );
+        Ok(proposal)
     }
 
     /// v0 -> v1: retroactively set metadata version key on legacy NFTs.

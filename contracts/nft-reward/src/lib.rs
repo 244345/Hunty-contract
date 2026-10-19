@@ -214,6 +214,14 @@ impl NftReward {
         Ok(proposal)
     }
 
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<hunty_migration::UpgradeProposal, hunty_migration::UpgradeAuthError> {
+        let proposal = migration::NftRewardMigration::cancel_upgrade(&env, &admin)?;
+        Ok(proposal)
+    }
+
     pub fn set_upgrade_timelock(
         env: Env,
         admin: Address,

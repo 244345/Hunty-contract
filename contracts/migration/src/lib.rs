@@ -13,6 +13,14 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 /// itself can never be set below it.
 pub const MIN_UPGRADE_TIMELOCK_SECONDS: u64 = 86_400; // 24 hours
 
+/// Maximum number of upgrade history entries returned in a single call.
+///
+/// This prevents resource exhaustion when callers pass `u32::MAX` or other
+/// large values. Both reward-manager and nft-reward previously clamped at 50
+/// in their respective wrappers; centralizing the bound here ensures every
+/// contract using `UpgradeAuthorization::get_history` enforces the same limit.
+pub const MAX_HISTORY_PAGE_SIZE: u32 = 50;
+
 pub const VERSION_KEY: Symbol = symbol_short!("SCHEMA");
 pub const ROLLBACK_KEY: Symbol = symbol_short!("RBKVER");
 const PROPOSAL_KEY: Symbol = symbol_short!("UPROP");
@@ -353,6 +361,21 @@ impl UpgradeAuthorization {
         env.storage().instance().remove(&PROPOSAL_KEY);
     }
 
+    /// Cancels a pending upgrade proposal.
+    ///
+    /// Requires admin authorization. Returns the cancelled proposal if one existed,
+    /// or `UpgradeAuthError::NoProposal` if no proposal was pending.
+    pub fn cancel_upgrade(
+        env: &Env,
+        admin: &Address,
+        configured_admin: Option<Address>,
+    ) -> Result<UpgradeProposal, UpgradeAuthError> {
+        Self::require_admin(env, admin, configured_admin)?;
+        let proposal = Self::get_proposal(env).ok_or(UpgradeAuthError::NoProposal)?;
+        env.storage().instance().remove(&PROPOSAL_KEY);
+        Ok(proposal)
+    }
+
     pub fn validate_execution(
         env: &Env,
         target_version: u32,
@@ -390,11 +413,12 @@ impl UpgradeAuthorization {
     }
 
     pub fn get_history(env: &Env, offset: u32, limit: u32) -> Vec<UpgradeHistoryEntry> {
+        let capped_limit = limit.min(MAX_HISTORY_PAGE_SIZE);
         let count: u32 = env.storage().persistent().get(&HIST_COUNT_KEY).unwrap_or(0);
         if offset >= count {
             return Vec::new(env);
         }
-        let end = offset.saturating_add(limit).min(count);
+        let end = offset.saturating_add(capped_limit).min(count);
         let mut entries = Vec::new(env);
         for i in offset..end {
             let key = (symbol_short!("UPHIS"), i);
